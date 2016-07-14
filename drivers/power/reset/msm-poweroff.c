@@ -426,6 +426,9 @@ static void msm_restart_prepare(const char *cmd)
 	if (force_warm_reboot)
 		pr_info("Forcing a warm reset of the system\n");
 
+	/* To preserve console-ramoops */
+	need_warm_reset = true;
+
 	/* Hard reset the PMIC unless memory contents must be maintained. */
 	if (force_warm_reboot || need_warm_reset)
 		qpnp_pon_system_pwr_off(PON_POWER_OFF_WARM_RESET);
