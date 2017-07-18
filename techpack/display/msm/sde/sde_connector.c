@@ -121,9 +121,24 @@ static int sde_backlight_device_update_status(struct backlight_device *bd)
 
 	if (c_conn->connector_type == DRM_MODE_CONNECTOR_DSI) {
 		dsi_display = (struct dsi_display *) c_conn->display;
-		bl_max_level = dsi_display->panel->bl_config.bl_max_level;
 		brightness_max_level =
 			dsi_display->panel->bl_config.brightness_max_level;
+
+		if (brightness > brightness_max_level)
+			brightness = brightness_max_level;
+		if (brightness > c_conn->thermal_max_brightness)
+			brightness = c_conn->thermal_max_brightness;
+
+		if (brightness) {
+			int bl_min = dsi_display->panel->bl_config.bl_min_level ? : 1;
+			int bl_range = dsi_display->panel->bl_config.bl_max_level - bl_min;
+
+			/* map UI brightness into driver backlight level rounding it */
+			bl_lvl = bl_min + DIV_ROUND_CLOSEST((brightness - 1) * bl_range,
+				dsi_display->panel->bl_config.brightness_max_level - 1);
+		} else {
+			bl_lvl = 0;
+		}
 	} else if (c_conn->connector_type == DRM_MODE_CONNECTOR_eDP) {
 		dp_panel = (struct dp_panel *) c_conn->drv_panel;
 		if (dp_panel) {
@@ -131,18 +146,18 @@ static int sde_backlight_device_update_status(struct backlight_device *bd)
 			brightness_max_level =
 				dp_panel->bl_config.brightness_max_level;
 		}
+
+		if (brightness > bl_max_level)
+			brightness = bl_max_level;
+		if (brightness > c_conn->thermal_max_brightness)
+			brightness = c_conn->thermal_max_brightness;
+
+		/* map UI brightness into driver backlight level with rounding */
+		bl_lvl = mult_frac(brightness, bl_max_level, brightness_max_level);
+
+		if (!bl_lvl && brightness)
+			bl_lvl = 1;
 	}
-
-	if (brightness > bl_max_level)
-		brightness = bl_max_level;
-	if (brightness > c_conn->thermal_max_brightness)
-		brightness = c_conn->thermal_max_brightness;
-
-	/* map UI brightness into driver backlight level with rounding */
-	bl_lvl = mult_frac(brightness, bl_max_level, brightness_max_level);
-
-	if (!bl_lvl && brightness)
-		bl_lvl = 1;
 
 	if (!dsi_display->panel->bl_config.allow_bl_update) {
 		dsi_display->panel->bl_config.unset_bl_level = bl_lvl;
