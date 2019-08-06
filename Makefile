@@ -688,6 +688,8 @@ ifdef CONFIG_LTO_CLANG
 AR		:= llvm-ar
 LLVM_NM		:= llvm-nm
 export LLVM_NM
+# Set O3 optimization level for LTO
+LDFLAGS		+= --plugin-opt=O3
 endif
 
 include arch/$(SRCARCH)/Makefile
