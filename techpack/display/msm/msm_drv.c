@@ -543,7 +543,7 @@ static int msm_init_vram(struct drm_device *dev)
 		ret = of_property_read_u32(dev->dev->of_node,
 					"qcom,vram-size", &vram_size);
 		size = (ret < 0) ? memparse(vram, NULL) : vram_size;
-		DRM_INFO("using 0x%x VRAM carveout\n", size);
+		DRM_INFO("using 0x%lx VRAM carveout\n", size);
 		ret = 0;
 	}
 
