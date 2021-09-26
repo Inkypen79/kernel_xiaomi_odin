@@ -907,6 +907,7 @@ void sde_connector_fod_pre_kickoff(struct drm_connector *connector)
 	struct sde_connector *c_conn;
 	struct dsi_display *display;
 	struct dsi_panel *panel;
+	int rc;
 
 	if (!connector)
 		return;
@@ -929,7 +930,9 @@ void sde_connector_fod_pre_kickoff(struct drm_connector *connector)
 	if (dsi_panel_is_fod_hbm_applied(panel))
 		return;
 
-	dsi_panel_apply_requested_fod_hbm(panel);
+	rc = dsi_panel_apply_requested_fod_hbm(panel);
+	if (rc)
+		return;
 
 	if (!dsi_panel_get_fod_hbm(panel))
 		dsi_panel_set_fod_ui(panel, 0);
