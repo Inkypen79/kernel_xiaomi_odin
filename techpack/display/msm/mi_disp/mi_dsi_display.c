@@ -563,6 +563,22 @@ ssize_t mi_dsi_display_cell_id_read(void *display,
 	return snprintf(buf, size, "%s\n", cell_id_info_str);
 }
 
+ssize_t mi_dsi_display_fod_ui_read(void *display,
+                        char *buf, size_t size)
+{
+        struct dsi_display *dsi_display = (struct dsi_display *)display;
+	u32 fod_ui_ready = 0;
+
+        if (!dsi_display || !dsi_display->panel) {
+                DISP_ERROR("Invalid display ptr\n");
+                return -EINVAL;
+        }
+
+	fod_ui_ready = dsi_display->panel->mi_cfg.fod_ui_ready;
+
+        DISP_INFO("read fod_ui: %d \n", fod_ui_ready);
+        return snprintf(buf, size, "%d\n", fod_ui_ready);
+}
 
 int mi_display_pm_suspend(void)
 {

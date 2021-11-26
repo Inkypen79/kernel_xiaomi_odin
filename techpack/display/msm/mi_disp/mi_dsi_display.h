@@ -84,4 +84,7 @@ void mi_dsi_display_update_backlight(struct dsi_display *display);
 ssize_t mi_dsi_display_cell_id_read(void *display,
 			char *buf, size_t size);
 
+ssize_t mi_dsi_display_fod_ui_read(void *display,
+                        char *buf, size_t size);
+
 #endif /*_MI_DSI_DISPLAY_H_*/

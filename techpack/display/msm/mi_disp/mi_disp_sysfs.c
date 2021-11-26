@@ -301,6 +301,23 @@ static ssize_t cell_id_show(struct device *device,
 	return ret;
 }
 
+static ssize_t fod_ui_show(struct device *device,
+                struct device_attribute *attr, char *buf)
+{
+        struct disp_display *dd_ptr = to_disp_display(device);
+        int ret = 0;
+
+        if (dd_ptr->intf_type == MI_INTF_DSI) {
+                return mi_dsi_display_fod_ui_read(dd_ptr->display, buf, PAGE_SIZE);
+        } else {
+                DISP_ERROR("Unsupported display(%s intf)\n",
+                        get_disp_intf_type_name(dd_ptr->intf_type));
+                ret = -EINVAL;
+        }
+
+        return ret;
+}
+
 static DEVICE_ATTR_RW(disp_param);
 static DEVICE_ATTR_RW(mipi_rw);
 static DEVICE_ATTR_RO(panel_info);
@@ -311,6 +328,7 @@ static DEVICE_ATTR_RO(gamma_test);
 static DEVICE_ATTR_RW(brightness_clone);
 static DEVICE_ATTR_RO(hw_vsync_info);
 static DEVICE_ATTR_RO(cell_id);
+static DEVICE_ATTR_RO(fod_ui);
 
 static struct attribute *disp_feature_attrs[] = {
 	&dev_attr_disp_param.attr,
@@ -323,6 +341,7 @@ static struct attribute *disp_feature_attrs[] = {
 	&dev_attr_brightness_clone.attr,
 	&dev_attr_hw_vsync_info.attr,
 	&dev_attr_cell_id.attr,
+	&dev_attr_fod_ui.attr,
 	NULL
 };
 
