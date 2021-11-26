@@ -97,6 +97,7 @@ enum disp_sysfs_node {
 	MI_SYSFS_DYNAMIC_FPS = 1,
 	MI_SYSFS_DOZE_BRIGHTNESS = 2,
 	MI_SYSFS_BRIGHTNESS_CLONE = 3,
+	MI_SYSFS_FOD_UI = 4,
 	MI_SYSFS_MAX,
 };
 
@@ -141,6 +142,8 @@ static inline const char *get_disp_sysfs_node_name(int sysfs_node)
 		return "doze_brightness";
 	case MI_SYSFS_BRIGHTNESS_CLONE:
 		return "brightness_clone";
+	case MI_SYSFS_FOD_UI:
+		return "fod_ui";
 	default:
 		return "Unknown";
 	}
