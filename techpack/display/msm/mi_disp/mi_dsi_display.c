@@ -576,8 +576,8 @@ ssize_t mi_dsi_display_fod_ui_read(void *display,
 
 	fod_ui_ready = dsi_display->panel->mi_cfg.fod_ui_ready;
 
-        DISP_INFO("read fod_ui: %d \n", fod_ui_ready);
-        return snprintf(buf, size, "%d\n", fod_ui_ready);
+        DISP_INFO("read fod_ui: %d \n", !!fod_ui_ready);
+        return snprintf(buf, size, "%d\n", !!fod_ui_ready);
 }
 
 int mi_display_pm_suspend(void)

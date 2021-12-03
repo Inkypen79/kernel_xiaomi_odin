@@ -459,6 +459,7 @@ void mi_sde_connector_fod_ui_ready(struct dsi_display *display, int type, int va
 	d_event.type = MI_DISP_EVENT_FOD;
 	d_event.length = sizeof(display->panel->mi_cfg.fod_ui_ready);
 	mi_disp_feature_event_notify(&d_event, (u8 *)&display->panel->mi_cfg.fod_ui_ready);
+        mi_disp_feature_sysfs_notify(d_event.disp_id, MI_SYSFS_FOD_UI);
 }
 
 void mi_sde_connector_fod_notify(struct drm_connector *conn)
