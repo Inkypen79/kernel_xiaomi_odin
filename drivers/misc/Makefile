@@ -66,6 +66,6 @@ qseecom-mod-$(CONFIG_COMPAT)	+= compat_qseecom.o
 obj-$(CONFIG_PROFILER)			+= profiler.o
 obj-$(CONFIG_WIGIG_SENSING_SPI)	+= wigig_sensing.o
 obj-$(CONFIG_HISI_HIKEY_USB)	+= hisi_hikey_usb.o
-obj-y                           += perf_helper.o
+obj-$(CONFIG_PERF_HELPER)	+= perf_helper.o
 obj-$(CONFIG_GPIO_TESTING_MODE)	+= gpio-testing-mode.o
 obj-$(CONFIG_MI_HARDWARE_ID)    += hwid.o
