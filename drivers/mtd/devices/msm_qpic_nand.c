@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2007 Google, Inc.
- * Copyright (c) 2012-2020 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2021 The Linux Foundation. All rights reserved.
  */
 
 #include "msm_qpic_nand.h"
@@ -18,6 +18,38 @@
 #define SMEM_AARM_PARTITION_TABLE 9
 #define SMEM_APPS 0
 #define ONE_CODEWORD_SIZE 516
+
+static struct device *dev_node;
+static int msm_nand_bam_panic_notifier(struct notifier_block *this,
+					unsigned long event, void *ptr)
+{
+	struct msm_nand_info *info = dev_get_drvdata(dev_node);
+
+	pr_info("Dumping APSS bam pipes register dumps\n");
+	sps_get_bam_debug_info(info->sps.bam_handle, 93,
+			(SPS_BAM_PIPE(0) |
+			 SPS_BAM_PIPE(1) |
+			 SPS_BAM_PIPE(2) |
+			 SPS_BAM_PIPE(3)),
+			 0, 2);
+	return NOTIFY_DONE;
+}
+
+static struct notifier_block msm_nand_bam_panic_blk = {
+	.notifier_call = msm_nand_bam_panic_notifier,
+};
+
+void msm_nand_bam_register_panic_handler(void)
+{
+	atomic_notifier_chain_register(&panic_notifier_list,
+			&msm_nand_bam_panic_blk);
+}
+
+void msm_nand_bam_unregister_panic_handler(void)
+{
+	atomic_notifier_chain_unregister(&panic_notifier_list,
+					&msm_nand_bam_panic_blk);
+}
 
 /*
  * Get the DMA memory for requested amount of size. It returns the pointer
@@ -1709,6 +1741,8 @@ static int msm_nand_is_erased_page_ps(struct mtd_info *mtd, loff_t from,
 	uint32_t cwperpage = (mtd->writesize >> 9);
 	int err, submitted_num_desc = 0;
 	uint32_t n = 0, num_zero_bits = 0, total_ecc_byte_cnt;
+	uint32_t cw_desc_cnt = 1;
+	struct sps_command_element *curr_ce, *start_ce;
 	struct msm_nand_rw_reg_data data;
 	struct sps_iovec *iovec;
 	struct sps_iovec iovec_temp;
@@ -1768,8 +1802,6 @@ static int msm_nand_is_erased_page_ps(struct mtd_info *mtd, loff_t from,
 		dma_map_single(chip->dev, ecc, total_ecc_byte_cnt,
 				DMA_FROM_DEVICE);
 
-	uint32_t cw_desc_cnt = 1;
-	struct sps_command_element *curr_ce, *start_ce;
 	data.addr0 = (rw_params->page << 16) | rw_params->oob_col;
 	data.addr1 = (rw_params->page >> 16) & 0xff;
 	for (n = rw_params->start_sector; n < cwperpage; n++) {
@@ -2941,7 +2973,14 @@ static int msm_nand_read_partial_page(struct mtd_info *mtd,
 			no_copy = false;
 
 		ops->datbuf = no_copy ? actual_buf : bounce_buf;
-		if (info->nand_chip.caps & MSM_NAND_CAP_PAGE_SCOPE_READ)
+
+		/*
+		 * Do a Pagescope read only if PAGE_SCOPE_READ is enabled
+		 * and request length is greater than codeword size or
+		 * the page offset is not aligned to start of the page.
+		 */
+		if ((info->nand_chip.caps & MSM_NAND_CAP_PAGE_SCOPE_READ) &&
+				((len > ONE_CODEWORD_SIZE) || (offset != 0)))
 			err = msm_nand_read_pagescope(mtd, aligned_from, ops);
 		else {
 			if ((len <= ONE_CODEWORD_SIZE) && (offset == 0))
@@ -4548,6 +4587,8 @@ static int msm_nand_probe(struct platform_device *pdev)
 	pr_info("Allocated DMA buffer at virt_addr 0x%pK, phys_addr 0x%x\n",
 		info->nand_chip.dma_virt_addr, info->nand_chip.dma_phys_addr);
 	pr_info("Host capabilities:0x%08x\n", info->nand_chip.caps);
+	dev_node = dev;
+	msm_nand_bam_register_panic_handler();
 	goto out;
 free_bam:
 	msm_nand_bam_free(info);
@@ -4569,6 +4610,7 @@ static int msm_nand_remove(struct platform_device *pdev)
 {
 	struct msm_nand_info *info = dev_get_drvdata(&pdev->dev);
 
+	msm_nand_bam_unregister_panic_handler();
 	if (pm_runtime_suspended(&(pdev)->dev))
 		pm_runtime_resume(&(pdev)->dev);
 

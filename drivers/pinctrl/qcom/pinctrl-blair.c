@@ -118,7 +118,23 @@
 		.offset = qup_offset,                   \
 	}
 
+#define TLMM_NORTH_SPARE_OFFSET 0x1B3000
+#define TLMM_NORTH_SPARE1_OFFSET 0x1B4000
 
+#define SPARE_REG(sparereg, spare_offset)               \
+	{                                               \
+		.spare_reg = tlmm_##sparereg,            \
+		.offset = spare_offset,                 \
+	}
+
+enum blair_tlmm_spare {
+	tlmm_west_spare,
+	tlmm_west_spare1,
+	tlmm_north_spare,
+	tlmm_north_spare1,
+	tlmm_south_spare,
+	tlmm_south_spare1,
+};
 
 static const struct pinctrl_pin_desc blair_pins[] = {
 	PINCTRL_PIN(0, "GPIO_0"),
@@ -1312,6 +1328,15 @@ static const struct msm_function blair_functions[] = {
 	FUNCTION(USB_PHY),
 };
 
+static const struct msm_spare_tlmm blair_spare_regs[] = {
+	SPARE_REG(west_spare, 0),
+	SPARE_REG(west_spare1, 0),
+	SPARE_REG(north_spare, TLMM_NORTH_SPARE_OFFSET),
+	SPARE_REG(north_spare1, TLMM_NORTH_SPARE1_OFFSET),
+	SPARE_REG(south_spare, 0),
+	SPARE_REG(south_spare1, 0),
+};
+
 /* Every pin is maintained as a single group, and missing or non-existing pin
  * would be maintained as dummy group to synchronize pin group index with
  * pin descriptor registered with pinctrl core.
@@ -1571,6 +1596,76 @@ static const int blair_reserved_gpios[] = {
 	13, 14, 15, 16, 17, 45, 46, 48, 56, 57, -1
 };
 
+static const struct msm_gpio_wakeirq_map blair_mpm_map[] = {
+	{0, 84},
+	{3, 6},
+	{4, 7},
+	{7, 8},
+	{8, 9},
+	{9, 10},
+	{11, 11},
+	{12, 13},
+	{13, 14},
+	{16, 16},
+	{17, 17},
+	{18, 18},
+	{19, 19},
+	{21, 20},
+	{22, 21},
+	{23, 23},
+	{24, 24},
+	{25, 25},
+	{27, 26},
+	{28, 27},
+	{37, 28},
+	{38, 29},
+	{48, 30},
+	{50, 31},
+	{51, 32},
+	{52, 33},
+	{57, 34},
+	{59, 35},
+	{60, 37},
+	{61, 38},
+	{62, 39},
+	{64, 40},
+	{66, 41},
+	{67, 42},
+	{68, 43},
+	{69, 44},
+	{78, 45},
+	{82, 36},
+	{83, 47},
+	{84, 48},
+	{85, 49},
+	{87, 50},
+	{88, 51},
+	{91, 52},
+	{94, 53},
+	{95, 54},
+	{96, 55},
+	{97, 56},
+	{98, 57},
+	{99, 58},
+	{100, 59},
+	{104, 60},
+	{107, 61},
+	{118, 62},
+	{124, 63},
+	{125, 64},
+	{126, 65},
+	{128, 66},
+	{129, 67},
+	{131, 69},
+	{133, 70},
+	{134, 71},
+	{136, 73},
+	{142, 74},
+	{150, 75},
+	{153, 76},
+	{155, 77},
+};
+
 static const struct msm_pinctrl_soc_data blair_pinctrl = {
 	.pins = blair_pins,
 	.npins = ARRAY_SIZE(blair_pins),
@@ -1580,6 +1675,10 @@ static const struct msm_pinctrl_soc_data blair_pinctrl = {
 	.ngroups = ARRAY_SIZE(blair_groups),
 	.reserved_gpios = blair_reserved_gpios,
 	.ngpios = 157,
+	.wakeirq_map = blair_mpm_map,
+	.nwakeirq_map = ARRAY_SIZE(blair_mpm_map),
+	.spare_regs = blair_spare_regs,
+	.nspare_regs = ARRAY_SIZE(blair_spare_regs),
 };
 
 static int blair_pinctrl_probe(struct platform_device *pdev)

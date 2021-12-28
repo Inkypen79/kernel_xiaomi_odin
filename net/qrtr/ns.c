@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause
 /*
  * Copyright (c) 2015, Sony Mobile Communications Inc.
- * Copyright (c) 2013, 2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013, 2020-2021, The Linux Foundation. All rights reserved.
  * Copyright (c) 2020, Linaro Ltd.
  */
 
@@ -97,6 +97,25 @@ static struct qrtr_node *node_get(unsigned int node_id)
 
 	return node;
 }
+
+unsigned int qrtr_get_service_id(unsigned int node_id, unsigned int port_id)
+{
+	struct qrtr_server *srv;
+	struct qrtr_node *node;
+	unsigned long index;
+
+	node = node_get(node_id);
+	if (!node)
+		return 0;
+
+	xa_for_each(&node->servers, index, srv) {
+		if (srv->node == node_id && srv->port == port_id)
+			return srv->service;
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL(qrtr_get_service_id);
 
 static int server_match(const struct qrtr_server *srv,
 			const struct qrtr_server_filter *f)
@@ -208,24 +227,26 @@ static int announce_servers(struct sockaddr_qrtr *sq)
 	struct qrtr_server *srv;
 	struct qrtr_node *node;
 	unsigned long index;
+	unsigned long node_idx;
 	int ret;
 
-	node = node_get(qrtr_ns.local_node);
-	if (!node)
-		return 0;
-
 	/* Announce the list of servers registered in this node */
-	xa_for_each(&node->servers, index, srv) {
-		ret = service_announce_new(sq, srv);
-		if (ret < 0) {
-			if (ret == -ENODEV)
-				continue;
+	xa_for_each(&nodes, node_idx, node) {
+		if (node->id == sq->sq_node) {
+			pr_info("Avoiding duplicate announce for NODE ID %u\n", node->id);
+			continue;
+		}
+		xa_for_each(&node->servers, index, srv) {
+			ret = service_announce_new(sq, srv);
+			if (ret < 0) {
+				if (ret == -ENODEV)
+					continue;
 
-			pr_err("failed to announce new service %d\n", ret);
-			return ret;
+				pr_err("failed to announce new service %d\n", ret);
+				return ret;
+			}
 		}
 	}
-
 	return 0;
 }
 

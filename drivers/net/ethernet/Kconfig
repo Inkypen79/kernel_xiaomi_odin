@@ -183,4 +183,22 @@ source "drivers/net/ethernet/wiznet/Kconfig"
 source "drivers/net/ethernet/xilinx/Kconfig"
 source "drivers/net/ethernet/xircom/Kconfig"
 
+config QPS615
+	tristate "QPS615 driver"
+	select PHYLINK
+	select PAGE_POOL
+	help
+	  QPS615 is a PCIe Ethernet switch IC with DUAL NIC
+	  support and allows to connect upto two endpoints.
+	  Each NIC port supports multiple MII interfaces and
+	  each port has a capable of 10Gbps data rate.
+
+config QPS615_IOSS
+	tristate "QPS615_IOSS glue driver for QPS615 driver"
+	depends on QPS615
+	help
+	  QPS615_IOSS is a glue layer on top of QPS615
+	  module to enable IPA offload data path between
+	  backhaul and NIC Ports and endpoints. Helps to
+	  achieve high data rates with more power savings.
 endif # ETHERNET

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2016-2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2016-2021, The Linux Foundation. All rights reserved.
  * Copyright (C) 2021 XiaoMi, Inc.
  */
 #ifdef CONFIG_DEBUG_FS
@@ -39,7 +39,8 @@
 #define TZBSP_FVER_MINOR_SHIFT          12
 #define TZBSP_DIAG_MAJOR_VERSION_V9     9
 #define TZBSP_DIAG_MINOR_VERSION_V2     2
-#define TZBSP_DIAG_MINOR_VERSION_V21     3
+#define TZBSP_DIAG_MINOR_VERSION_V21    3
+#define TZBSP_DIAG_MINOR_VERSION_V22    4
 
 /* TZ Diag Feature Version Id */
 #define QCOM_SCM_FEAT_DIAG_ID           0x06
@@ -1516,7 +1517,9 @@ static int tzdbg_get_tz_version(void)
 	((((version >> TZBSP_FVER_MINOR_SHIFT) & TZBSP_FVER_MAJOR_MINOR_MASK)
 			== TZBSP_DIAG_MINOR_VERSION_V2) ||
 	(((version >> TZBSP_FVER_MINOR_SHIFT) & TZBSP_FVER_MAJOR_MINOR_MASK)
-			== TZBSP_DIAG_MINOR_VERSION_V21)))
+			== TZBSP_DIAG_MINOR_VERSION_V21) ||
+	(((version >> TZBSP_FVER_MINOR_SHIFT) & TZBSP_FVER_MAJOR_MINOR_MASK)
+			== TZBSP_DIAG_MINOR_VERSION_V22)))
 		tzdbg.is_enlarged_buf = true;
 	else
 		tzdbg.is_enlarged_buf = false;

@@ -208,11 +208,11 @@ static struct f_gsi *get_connected_gsi(void)
 	int i;
 
 	for (i = 0; i < IPA_USB_MAX_TETH_PROT_SIZE; i++) {
-		if (inst_status[i].opts)
+		if (inst_status[i].opts) {
 			connected_gsi = inst_status[i].opts->gsi;
-
-		if (connected_gsi && atomic_read(&connected_gsi->connected))
-			return connected_gsi;
+			if (connected_gsi && atomic_read(&connected_gsi->connected))
+				return connected_gsi;
+		}
 	}
 
 	return NULL;
@@ -502,8 +502,12 @@ static int ipa_connect_channels(struct gsi_data_port *d_port)
 	struct ipa_req_chan_out_params ipa_in_channel_out_params;
 	struct ipa_req_chan_out_params ipa_out_channel_out_params;
 
-	if (gsi->prot_id == IPA_USB_RMNET)
+	if (gsi->prot_id == IPA_USB_RMNET) {
 		d_port->in_request.use_tcm_mem = gsi->rmnet_use_tcm_mem;
+		/* override needed for moving from LLCC TCM to DDR memory */
+		d_port->in_request.buf_len = GSI_IN_RMNET_BUFF_SIZE;
+		d_port->in_request.num_bufs = GSI_NUM_IN_RMNET_BUFFERS;
+	}
 
 	ret = usb_gsi_ep_op(d_port->in_ep, &d_port->in_request,
 			GSI_EP_OP_PREPARE_TRBS);
@@ -2676,6 +2680,7 @@ static void gsi_suspend(struct usb_function *f)
 		return;
 	}
 
+	gsi->c_port.is_suspended = true;
 	/*
 	 * GPS doesn't use any data interface, hence bail out as there is no
 	 * GSI specific handling needed.
@@ -2685,7 +2690,6 @@ static void gsi_suspend(struct usb_function *f)
 		return;
 	}
 
-	gsi->c_port.is_suspended = true;
 	block_db = true;
 	usb_gsi_ep_op(gsi->d_port.in_ep, (void *)&block_db,
 			GSI_EP_OP_SET_CLR_BLOCK_DBL);
@@ -2736,6 +2740,8 @@ static void gsi_resume(struct usb_function *f)
 	/* Check any pending cpkt, and queue immediately on resume */
 	gsi_ctrl_send_notification(gsi);
 
+	gsi->rwake_inprogress = false;
+
 	if (gsi->prot_id == IPA_USB_GPS) {
 		log_event_dbg("%s: resume done\n", __func__);
 		return;
@@ -2754,8 +2760,6 @@ static void gsi_resume(struct usb_function *f)
 			gsi_rndis_flow_ctrl_enable(false, gsi->params);
 		gsi->params->state = RNDIS_DATA_INITIALIZED;
 	}
-
-	gsi->rwake_inprogress = false;
 
 	post_event(&gsi->d_port, EVT_RESUMED);
 	queue_delayed_work(gsi->d_port.ipa_usb_wq, &gsi->d_port.usb_ipa_w, 0);
@@ -3007,6 +3011,15 @@ static void gsi_get_ether_addr(const char *str, u8 *dev_addr)
 	random_ether_addr(dev_addr);
 }
 
+void rmnet_gsi_update_in_buffer_mem_type(struct usb_function *f, bool use_tcm)
+{
+	struct f_gsi *gsi = func_to_gsi(f);
+
+	if (gsi && gsi->prot_id == IPA_USB_RMNET)
+		gsi->rmnet_use_tcm_mem = use_tcm;
+}
+EXPORT_SYMBOL(rmnet_gsi_update_in_buffer_mem_type);
+
 static int gsi_bind(struct usb_configuration *c, struct usb_function *f)
 {
 	struct usb_composite_dev *cdev = c->cdev;
@@ -3201,7 +3214,7 @@ static int gsi_bind(struct usb_configuration *c, struct usb_function *f)
 		gsi->d_port.in_aggr_size = GSI_IN_MBIM_AGGR_SIZE;
 		info.in_req_buf_len = GSI_IN_MBIM_AGGR_SIZE;
 		info.in_req_num_buf = GSI_NUM_IN_BUFFERS;
-		gsi->d_port.out_aggr_size = GSI_OUT_AGGR_SIZE;
+		gsi->d_port.out_aggr_size = GSI_OUT_MBIM_AGGR_SIZE;
 		info.out_req_buf_len = GSI_OUT_MBIM_BUF_LEN;
 		info.out_req_num_buf = GSI_NUM_OUT_BUFFERS;
 		info.notify_buf_len = sizeof(struct usb_cdc_notification);

@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * Copyright (c) 2015-2016, 2018-2020 The Linux Foundation.
+ * Copyright (c) 2015-2016, 2018-2021 The Linux Foundation.
  * All rights reserved.
  */
 
@@ -94,6 +94,7 @@ struct clk_alpha_pll {
 #define SUPPORTS_DYNAMIC_UPDATE	BIT(3)
 #define SUPPORTS_FSM_LEGACY_MODE BIT(4)
 #define SUPPORTS_SLEW           BIT(4)
+#define BYPASS_LATCH		BIT(6)
 	u8 flags;
 
 	struct clk_regmap clkr;
@@ -173,6 +174,7 @@ extern const struct clk_ops clk_alpha_pll_postdiv_zonda_ops;
 extern const struct clk_ops clk_alpha_pll_zonda_5lpe_ops;
 
 extern const struct clk_ops clk_alpha_pll_lucid_5lpe_ops;
+extern const struct clk_ops clk_alpha_pll_lucid_5lpe_sdx_cpu_ops;
 extern const struct clk_ops clk_alpha_pll_fixed_lucid_5lpe_ops;
 extern const struct clk_ops clk_alpha_pll_postdiv_lucid_5lpe_ops;
 extern const struct clk_ops clk_alpha_pll_slew_ops;

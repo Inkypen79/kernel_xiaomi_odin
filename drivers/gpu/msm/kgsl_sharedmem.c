@@ -137,7 +137,18 @@ imported_mem_show(struct kgsl_process_private *priv,
 			}
 		}
 
-		kgsl_mem_entry_put(entry);
+		/*
+		 * If refcount on mem entry is the last refcount, we will
+		 * call kgsl_mem_entry_destroy and detach it from process
+		 * list. When there is no refcount on the process private,
+		 * we will call kgsl_destroy_process_private to do cleanup.
+		 * During cleanup, we will try to remove the same sysfs
+		 * node which is in use by the current thread and this
+		 * situation will end up in a deadloack.
+		 * To avoid this situation, use a worker to put the refcount
+		 * on mem entry.
+		 */
+		kgsl_mem_entry_put_deferred(entry);
 		spin_lock(&priv->mem_lock);
 	}
 	spin_unlock(&priv->mem_lock);
@@ -204,10 +215,10 @@ static ssize_t mem_entry_sysfs_show(struct kobject *kobj,
 	ssize_t ret;
 
 	/*
-	 * kgsl_process_init_sysfs takes a refcount to the process_private,
-	 * which is put when the kobj is released. This implies that priv will
-	 * not be freed until this function completes, and no further locking
-	 * is needed.
+	 * sysfs_remove_file waits for reads to complete before the node is
+	 * deleted and process private is freed only once kobj is released.
+	 * This implies that priv will not be freed until this function
+	 * completes, and no further locking is needed.
 	 */
 	priv = kobj ? container_of(kobj, struct kgsl_process_private, kobj) :
 			NULL;
@@ -229,12 +240,6 @@ static ssize_t memtype_sysfs_show(struct kobject *kobj,
 	u64 size = 0;
 	int id = 0;
 
-	/*
-	 * kgsl_process_init_sysfs takes a refcount to the process_private,
-	 * which is put when the kobj is released. This implies that priv will
-	 * not be freed until this function completes, and no further locking
-	 * is needed.
-	 */
 	priv = container_of(kobj, struct kgsl_process_private, kobj_memtype);
 	memtype = container_of(attr, struct kgsl_memtype, attr);
 
@@ -255,7 +260,7 @@ static ssize_t memtype_sysfs_show(struct kobject *kobj,
 		if (type == memtype->type)
 			size += memdesc->size;
 
-		kgsl_mem_entry_put(entry);
+		kgsl_mem_entry_put_deferred(entry);
 		spin_lock(&priv->mem_lock);
 	}
 	spin_unlock(&priv->mem_lock);
@@ -263,13 +268,9 @@ static ssize_t memtype_sysfs_show(struct kobject *kobj,
 	return scnprintf(buf, PAGE_SIZE, "%llu\n", size);
 }
 
+/* Dummy release function - we have nothing to do here */
 static void mem_entry_release(struct kobject *kobj)
 {
-	struct kgsl_process_private *priv;
-
-	priv = container_of(kobj, struct kgsl_process_private, kobj);
-	/* Put the refcount we got in kgsl_process_init_sysfs */
-	kgsl_process_private_put(priv);
 }
 
 static const struct sysfs_ops mem_entry_sysfs_ops = {
@@ -330,9 +331,6 @@ void kgsl_process_init_sysfs(struct kgsl_device *device,
 		struct kgsl_process_private *private)
 {
 	int i;
-
-	/* Keep private valid until the sysfs enries are removed. */
-	kgsl_process_private_get(private);
 
 	if (kobject_init_and_add(&private->kobj, &ktype_mem_entry,
 		kgsl_driver.prockobj, "%d", pid_nr(private->pid))) {
@@ -954,6 +952,11 @@ static void kgsl_contiguous_free(struct kgsl_memdesc *memdesc)
 
 	atomic_long_sub(memdesc->size, &kgsl_driver.stats.coherent);
 
+#ifdef CONFIG_MM_STAT_UNRECLAIMABLE_PAGES
+	mod_node_page_state(page_pgdat(phys_to_page(memdesc->physaddr)),
+		NR_UNRECLAIMABLE_PAGES, -(memdesc->size >> PAGE_SHIFT));
+#endif
+
 	_kgsl_contiguous_free(memdesc);
 }
 
@@ -963,6 +966,7 @@ static void kgsl_free_secure_system_pages(struct kgsl_memdesc *memdesc)
 	int i;
 	struct scatterlist *sg;
 	int ret = unlock_sgt(memdesc->sgt);
+	int order = get_order(PAGE_SIZE);
 
 	if (ret) {
 		/*
@@ -981,7 +985,11 @@ static void kgsl_free_secure_system_pages(struct kgsl_memdesc *memdesc)
 	for_each_sg(memdesc->sgt->sgl, sg, memdesc->sgt->nents, i) {
 		struct page *page = sg_page(sg);
 
-		__free_pages(page, get_order(PAGE_SIZE));
+		__free_pages(page, order);
+#ifdef CONFIG_MM_STAT_UNRECLAIMABLE_PAGES
+		mod_node_page_state(page_pgdat(page), NR_UNRECLAIMABLE_PAGES,
+				-(1 << order));
+#endif
 	}
 
 	sg_free_table(memdesc->sgt);
@@ -1034,15 +1042,20 @@ static void kgsl_free_pool_pages(struct kgsl_memdesc *memdesc)
 
 static void kgsl_free_system_pages(struct kgsl_memdesc *memdesc)
 {
-	int i;
+	int i, order = get_order(PAGE_SIZE);
 
 	kgsl_paged_unmap_kernel(memdesc);
 	WARN_ON(memdesc->hostptr);
 
 	atomic_long_sub(memdesc->size, &kgsl_driver.stats.page_alloc);
 
-	for (i = 0; i < memdesc->page_count; i++)
-		__free_pages(memdesc->pages[i], get_order(PAGE_SIZE));
+	for (i = 0; i < memdesc->page_count; i++) {
+		__free_pages(memdesc->pages[i], order);
+#ifdef CONFIG_MM_STAT_UNRECLAIMABLE_PAGES
+		mod_node_page_state(page_pgdat(memdesc->pages[i]),
+				NR_UNRECLAIMABLE_PAGES, -(1 << order));
+#endif
+	}
 
 	memdesc->page_count = 0;
 	kvfree(memdesc->pages);
@@ -1089,6 +1102,7 @@ static int kgsl_system_alloc_pages(u64 size, struct page ***pages,
 	struct scatterlist sg;
 	struct page **local;
 	int i, npages = size >> PAGE_SHIFT;
+	int order = get_order(PAGE_SIZE);
 
 	local = kvcalloc(npages, sizeof(*pages), GFP_KERNEL);
 	if (!local)
@@ -1100,8 +1114,13 @@ static int kgsl_system_alloc_pages(u64 size, struct page ***pages,
 
 		local[i] = alloc_pages(gfp, get_order(PAGE_SIZE));
 		if (!local[i]) {
-			for (i = i - 1; i >= 0; i--)
-				__free_pages(local[i], get_order(PAGE_SIZE));
+			for (i = i - 1; i >= 0; i--) {
+#ifdef CONFIG_MM_STAT_UNRECLAIMABLE_PAGES
+				mod_node_page_state(page_pgdat(local[i]),
+					NR_UNRECLAIMABLE_PAGES, -(1 << order));
+#endif
+				__free_pages(local[i], order);
+			}
 			kvfree(local);
 			return -ENOMEM;
 		}
@@ -1112,6 +1131,10 @@ static int kgsl_system_alloc_pages(u64 size, struct page ***pages,
 		sg_dma_address(&sg) = page_to_phys(local[i]);
 
 		dma_sync_sg_for_device(dev, &sg, 1, DMA_BIDIRECTIONAL);
+#ifdef CONFIG_MM_STAT_UNRECLAIMABLE_PAGES
+		mod_node_page_state(page_pgdat(local[i]), NR_UNRECLAIMABLE_PAGES,
+				(1 << order));
+#endif
 	}
 
 	*pages = local;
@@ -1149,6 +1172,7 @@ static int kgsl_alloc_secure_pages(struct kgsl_device *device,
 	sgt = kzalloc(sizeof(*sgt), GFP_KERNEL);
 	if (!sgt) {
 		kgsl_pool_free_pages(pages, count);
+		kvfree(pages);
 		return -ENOMEM;
 	}
 
@@ -1156,6 +1180,7 @@ static int kgsl_alloc_secure_pages(struct kgsl_device *device,
 	if (ret) {
 		kfree(sgt);
 		kgsl_pool_free_pages(pages, count);
+		kvfree(pages);
 		return ret;
 	}
 
@@ -1258,9 +1283,14 @@ static int kgsl_alloc_contiguous(struct kgsl_device *device,
 	memdesc->ops = &kgsl_contiguous_ops;
 	ret = _kgsl_alloc_contiguous(&device->pdev->dev, memdesc, size, 0);
 
-	if (!ret)
+	if (!ret) {
 		KGSL_STATS_ADD(size, &kgsl_driver.stats.coherent,
 			&kgsl_driver.stats.coherent_max);
+#ifdef CONFIG_MM_STAT_UNRECLAIMABLE_PAGES
+		mod_node_page_state(page_pgdat(phys_to_page(memdesc->physaddr)),
+			NR_UNRECLAIMABLE_PAGES, (size >> PAGE_SHIFT));
+#endif
+	}
 
 	return ret;
 }
