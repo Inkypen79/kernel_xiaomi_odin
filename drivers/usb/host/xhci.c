@@ -1158,6 +1158,9 @@ int xhci_resume(struct xhci_hcd *xhci, bool hibernated)
 	bool			pending_portevent = false;
 	bool			reinit_xhc = false;
 
+	if (!hcd)
+		return 0;
+
 	if (!hcd->state)
 		return 0;
 
