@@ -2735,6 +2735,13 @@ static ssize_t fts_fod_status_store(struct device *dev, struct device_attribute 
 
 	return count;
 }
+
+static ssize_t fts_fod_state_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+        struct fts_ts_info *info = dev_get_drvdata(dev);
+
+        return snprintf(buf, TSP_BUF_SIZE, "%d,%d,%d\n", info->fod_x, info->fod_y, info->fod_pressed);
+}
 #endif
 
 #ifdef GESTURE_MODE
@@ -3284,6 +3291,8 @@ static DEVICE_ATTR(grip_area, (S_IRUGO | S_IWUSR | S_IWGRP),
 #ifdef FTS_FOD_AREA_REPORT
 static DEVICE_ATTR(fod_status, (S_IRUGO | S_IWUSR | S_IWGRP),
 		   fts_fod_status_show, fts_fod_status_store);
+static DEVICE_ATTR(fod_state, (S_IRUGO | S_IWUSR | S_IWGRP),
+		   fts_fod_state_show, NULL);
 #endif
 
 #ifdef GESTURE_MODE
@@ -3691,6 +3700,9 @@ static void fts_leave_pointer_event_handler(struct fts_ts_info *info,
 #endif
 
 		info->fod_pressed = false;
+		info->fod_x = 0;
+		info->fod_y = 0;
+		sysfs_notify(&info->fts_touch_dev->kobj, NULL, dev_attr_fod_state.attr.name);
 		input_report_key(info->input_dev, BTN_INFO, 0);
 		mi_disp_set_fod_queue_work(0, true);
 
@@ -4081,6 +4093,9 @@ static void fts_gesture_event_handler(struct fts_ts_info *info,
 
 				if ((info->sensor_sleep && !info->sleep_finger) || !info->sensor_sleep) {
 					info->fod_pressed = true;
+					info->fod_x = x;
+					info->fod_y = y;
+					sysfs_notify(&info->fts_touch_dev->kobj, NULL, dev_attr_fod_state.attr.name);
 					input_report_key(info->input_dev, BTN_INFO, 1);
 					mi_disp_set_fod_queue_work(1, true);
 					input_sync(info->input_dev);
@@ -7942,6 +7957,9 @@ static int fts_probe(struct spi_device *client)
 	if (error) {
 		logError(1, "%s ERROR: Failed to create fod_status sysfs group!\n", tag);
 	}
+	error = sysfs_create_file(&info->fts_touch_dev->kobj, &dev_attr_fod_state.attr);
+	if (error)
+		logError(1, "%s ERROR: Failed to create fod_state sysfs group!\n", tag);
 #endif
 #ifdef GESTURE_MODE
 	error =
