@@ -976,7 +976,6 @@ static int dwc3_gadget_ep_disable(struct usb_ep *ep)
 	struct dwc3			*dwc;
 	unsigned long			flags;
 	int				ret;
-	bool				call_rpm_put = false;
 
 	if (!ep) {
 		pr_debug("dwc3: invalid parameters\n");
@@ -991,18 +990,10 @@ static int dwc3_gadget_ep_disable(struct usb_ep *ep)
 					dep->name))
 		return 0;
 
-	if (atomic_read(&dwc->in_lpm)) {
-		pm_runtime_get_sync(dwc->sysdev);
-		call_rpm_put = true;
-	}
 	spin_lock_irqsave(&dwc->lock, flags);
 	ret = __dwc3_gadget_ep_disable(dep);
 	dbg_event(dep->number, "DISABLE", ret);
 	spin_unlock_irqrestore(&dwc->lock, flags);
-	if (call_rpm_put) {
-		pm_runtime_mark_last_busy(dwc->sysdev);
-		pm_runtime_put_autosuspend(dwc->sysdev);
-	}
 
 	return ret;
 }
@@ -1999,6 +1990,9 @@ int __dwc3_gadget_ep_set_halt(struct dwc3_ep *dep, int value, int protocol)
 
 			if (dep->flags & DWC3_EP_END_TRANSFER_PENDING) {
 				dep->flags |= DWC3_EP_PENDING_CLEAR_STALL;
+				if (protocol)
+					dwc->clear_stall_protocol = dep->number;
+
 				return 0;
 			}
 		}
@@ -3550,7 +3544,7 @@ static void dwc3_endpoint_interrupt(struct dwc3 *dwc,
 				}
 
 				dep->flags &= ~(DWC3_EP_STALL | DWC3_EP_WEDGE);
-				if (dwc->delayed_status)
+				if (dwc->clear_stall_protocol == dep->number)
 					dwc3_ep0_send_delayed_status(dwc);
 			}
 
@@ -4542,7 +4536,7 @@ int dwc3_gadget_init(struct dwc3 *dwc)
 		dev_info(dwc->dev, "changing max_speed on rev %08x\n",
 				dwc->revision);
 
-	dwc->gadget.max_speed		= dwc->maximum_speed;
+	dwc->gadget.max_speed		= dwc->max_hw_supp_speed;
 
 	/*
 	 * REVISIT: Here we should clear all pending IRQs to be

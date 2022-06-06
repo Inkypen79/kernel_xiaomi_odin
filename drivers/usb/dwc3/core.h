@@ -414,6 +414,7 @@
 #define DWC3_GUCTL2_RST_ACTBITLATER		BIT(14)
 
 /* Global User Control Register 3 */
+#define DWC3_GUCTL3_USB20_RETRY_DISABLE		BIT(16)
 #define DWC3_GUCTL3_SPLITDISABLE		BIT(14)
 
 /* Device Configuration Register */
@@ -1324,6 +1325,7 @@ struct dwc3 {
 	u8			rx_max_burst_prd;
 	u8			tx_thr_num_pkt_prd;
 	u8			tx_max_burst_prd;
+	u8			clear_stall_protocol;
 
 	const char		*hsphy_interface;
 

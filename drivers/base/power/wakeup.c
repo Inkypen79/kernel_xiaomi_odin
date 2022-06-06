@@ -3,7 +3,6 @@
  * drivers/base/power/wakeup.c - System wakeup events framework
  *
  * Copyright (c) 2010 Rafael J. Wysocki <rjw@sisk.pl>, Novell Inc.
- * Copyright (C) 2021 XiaoMi, Inc.
  */
 #define pr_fmt(fmt) "PM: " fmt
 
@@ -965,16 +964,18 @@ void pm_system_irq_wakeup(unsigned int irq_number)
 		struct irq_desc *desc;
 		const char *name = "null";
 
-		desc = irq_to_desc(irq_number);
-		if (desc == NULL)
-			name = "stray irq";
-		else if (desc->action && desc->action->name)
-			name = desc->action->name;
+		if (msm_show_resume_irq_mask) {
+			desc = irq_to_desc(irq_number);
+			if (desc == NULL)
+				name = "stray irq";
+			else if (desc->action && desc->action->name)
+				name = desc->action->name;
 
-		log_irq_wakeup_reason(irq_number);
-		pr_warn("%s: %d triggered %s\n", __func__,
-				irq_number, name);
+			log_irq_wakeup_reason(irq_number);
+			pr_warn("%s: %d triggered %s\n", __func__,
+					irq_number, name);
 
+		}
 		pm_system_wakeup();
 	}
 }

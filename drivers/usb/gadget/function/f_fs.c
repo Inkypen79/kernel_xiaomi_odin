@@ -1942,9 +1942,11 @@ static void ffs_data_closed(struct ffs_data *ffs)
 			spin_unlock_irqrestore(&ffs->eps_lock,
 							flags);
 
+			mutex_lock(&ffs->mutex);
 			if (epfiles)
 				ffs_epfiles_destroy(epfiles,
 						 ffs->eps_count);
+			mutex_unlock(&ffs->mutex);
 
 			if (ffs->setup_state == FFS_SETUP_PENDING)
 				__ffs_ep0_stall(ffs);
@@ -2026,6 +2028,7 @@ static void ffs_data_clear(struct ffs_data *ffs)
 	 * & ffs_epfile_release therefore maintaining a local
 	 * copy of epfile will save us from use-after-free.
 	 */
+	mutex_lock(&ffs->mutex);
 	if (epfiles) {
 		ffs_epfiles_destroy(epfiles, ffs->eps_count);
 		ffs->epfiles = NULL;
@@ -2192,7 +2195,7 @@ static void ffs_epfiles_destroy(struct ffs_epfile *epfiles, unsigned count)
 
 static void ffs_func_eps_disable(struct ffs_function *func)
 {
-	struct ffs_data *ffs      = func->ffs;
+	struct ffs_data *ffs = func->ffs;
 	struct ffs_ep *ep;
 	struct ffs_epfile *epfile;
 	unsigned short count;
@@ -2223,7 +2226,7 @@ static void ffs_func_eps_disable(struct ffs_function *func)
 
 static int ffs_func_eps_enable(struct ffs_function *func)
 {
-	struct ffs_data *ffs;
+	struct ffs_data *ffs = func->ffs;
 	struct ffs_ep *ep;
 	struct ffs_epfile *epfile;
 	unsigned short count;
