@@ -32,7 +32,11 @@ UBSAN_SANITIZE			:= n
 OBJECT_FILES_NON_STANDARD	:= y
 KCOV_INSTRUMENT			:= n
 
+ifdef CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE_O3
+CFLAGS_vgettimeofday.o = -O3 -mcmodel=tiny -fasynchronous-unwind-tables
+else
 CFLAGS_vgettimeofday.o = -O2 -mcmodel=tiny -fasynchronous-unwind-tables
+endif
 
 ifneq ($(c-gettimeofday-y),)
   CFLAGS_vgettimeofday.o += -include $(c-gettimeofday-y)
