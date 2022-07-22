@@ -64,7 +64,7 @@ int cam_debug_hw_trigger(unsigned int module_id)
 }
 /* xiaomi add hw trigger - end */
 
-const struct camera_debug_settings *cam_debug_get_settings()
+const struct camera_debug_settings *cam_debug_get_settings(void)
 {
 	return &cam_debug;
 }
