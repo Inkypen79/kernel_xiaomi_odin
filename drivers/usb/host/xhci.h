@@ -230,7 +230,7 @@ struct xhci_op_regs {
 #define CMD_ETE		(1 << 14)
 /* bits 15:31 are reserved (and should be preserved on writes). */
 
-#define XHCI_RESET_LONG_USEC		(10 * 1000 * 1000)
+#define XHCI_RESET_LONG_USEC		(1000 * 1000)
 #define XHCI_RESET_SHORT_USEC		(250 * 1000)
 
 /* IMAN - Interrupt Management Register */

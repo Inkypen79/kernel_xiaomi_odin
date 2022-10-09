@@ -642,17 +642,17 @@ static ssize_t _name##_show(struct device *dev,				\
 	struct device_attribute *attr, char *buf)			\
 {									\
 	bool flag;							\
-	int ret;							\
 	u8 index = 0;							\
 	struct ufs_hba *hba = dev_get_drvdata(dev);			\
+	pm_runtime_get_sync(hba->dev);					\
 	if (ufshcd_is_wb_flags(QUERY_FLAG_IDN##_uname))			\
 		index = ufshcd_wb_get_query_index(hba);			\
-	pm_runtime_get_sync(hba->dev);					\
-	ret = ufshcd_query_flag(hba, UPIU_QUERY_OPCODE_READ_FLAG,	\
-			QUERY_FLAG_IDN##_uname, index, &flag);		\
-	pm_runtime_put_sync(hba->dev);					\
-	if (ret)							\
+	if (ufshcd_query_flag(hba, UPIU_QUERY_OPCODE_READ_FLAG,		\
+		QUERY_FLAG_IDN##_uname, index, &flag)) {		\
+		pm_runtime_put_sync(hba->dev);				\
 		return -EINVAL;						\
+	}								\
+	pm_runtime_put_sync(hba->dev);					\
 	return snprintf(buf, PAGE_SIZE, "%s\n", flag ? "true" : "false"); \
 }									\
 static DEVICE_ATTR_RO(_name)
@@ -702,15 +702,15 @@ static ssize_t _name##_show(struct device *dev,				\
 	struct ufs_hba *hba = dev_get_drvdata(dev);			\
 	u32 value;							\
 	u8 index = 0;							\
-	int ret;							\
+	pm_runtime_get_sync(hba->dev);					\
 	if (ufshcd_is_wb_attrs(QUERY_ATTR_IDN##_uname))			\
 		index = ufshcd_wb_get_query_index(hba);			\
-	pm_runtime_get_sync(hba->dev);					\
-	ret = ufshcd_query_attr(hba, UPIU_QUERY_OPCODE_READ_ATTR,	\
-			QUERY_ATTR_IDN##_uname, index, 0, &value);	\
-	pm_runtime_put_sync(hba->dev);					\
-	if (ret)							\
+	if (ufshcd_query_attr(hba, UPIU_QUERY_OPCODE_READ_ATTR,		\
+		QUERY_ATTR_IDN##_uname, index, 0, &value)) {		\
+		pm_runtime_put_sync(hba->dev);				\
 		return -EINVAL;						\
+	}								\
+	pm_runtime_put_sync(hba->dev);					\
 	return snprintf(buf, PAGE_SIZE, "0x%08X\n", value);		\
 }									\
 static DEVICE_ATTR_RO(_name)
