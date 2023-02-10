@@ -852,6 +852,10 @@ config QGKI
 	  This flag is absent if the build is a GKI build. If this flag is
 	  enabled, all the ABI compatibilities are not applicable.
 
+config QGKI_SYSTEM
+        bool "QGKI config"
+        default n
+
 config MSM_PM
 	bool
 	select MSM_IDLE_STATS if DEBUG_FS
