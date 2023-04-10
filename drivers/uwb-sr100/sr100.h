@@ -19,12 +19,10 @@
 /*====================================================================================*/
 
 #define SR100_MAGIC 0xEA
-#define SR100_SET_PWR _IOW(SR100_MAGIC, 0x01, long)
-#define SR100_SET_DBG _IOW(SR100_MAGIC, 0x02, long)
-#define SR100_SET_POLL _IOW(SR100_MAGIC, 0x03, long)
-#define SR100_SET_FWD _IOW(SR100_MAGIC, 0x04, long)
-#define SR100_GET_THROUGHPUT _IOW(SR100_MAGIC, 0x05, long)
-#define SR100_ESE_RESET _IOW(SR100_MAGIC, 0x06, long)
+#define SR100_SET_PWR _IOW(SR100_MAGIC, 0x01, uint32_t)
+#define SR100_SET_FWD _IOW(SR100_MAGIC, 0x02, uint32_t)
+#define SR100_ESE_RESET _IOW(SR100_MAGIC, 0x03, uint32_t)
+#define SR100_GET_THROUGHPUT _IOW(SR100_MAGIC, 0x04, uint32_t)
 
 #define NORMAL_MODE_HEADER_LEN 4
 #define HBCI_MODE_HEADER_LEN 4
