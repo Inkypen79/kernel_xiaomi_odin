@@ -431,6 +431,9 @@ static int help(struct sk_buff *skb, unsigned int protoff,
 			goto out;
 		}
 
+		/* strlen("\1DCC SENT t AAAAAAAA P\1\n")=24
+		 * 5+MINMATCHLEN+strlen("t AAAAAAAA P\1\n")=14
+		 */
 		data = ib_ptr;
 		/* Skip any whitespace */
 		while (data < data_limit - 10) {
@@ -462,9 +465,8 @@ static int help(struct sk_buff *skb, unsigned int protoff,
 			if (memcmp(data, "\1DCC ", 5))
 				goto out;
 			data += 5;
-			/* we have at least (21+MINMATCHLEN)-(2+5)
-			 *bytes valid data left
-			 */
+			/* we have at least (21+MINMATCHLEN)-(2+5) bytes valid data left */
+
 			iph = ip_hdr(skb);
 			pr_debug("DCC found in master %pI4:%u %pI4:%u\n",
 				 &iph->saddr, ntohs(th->source),
@@ -497,9 +499,9 @@ static int help(struct sk_buff *skb, unsigned int protoff,
 				 *external (NAT'ed) IP
 				 */
 				tuple = &ct->tuplehash[dir].tuple;
-			if ((tuple->src.u3.ip != dcc_ip &&
-			     ct->tuplehash[!dir].tuple.dst.u3.ip != dcc_ip) ||
-			    dcc_port == 0) {
+				if ((tuple->src.u3.ip != dcc_ip &&
+				     ct->tuplehash[!dir].tuple.dst.u3.ip != dcc_ip) ||
+				    dcc_port == 0) {
 					net_warn_ratelimited("Forged DCC command from %pI4: %pI4:%u\n",
 							     &tuple->src.u3.ip,
 							     &dcc_ip, dcc_port);

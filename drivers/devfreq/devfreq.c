@@ -4,7 +4,6 @@
  *	    for Non-CPU Devices.
  *
  * Copyright (C) 2011 Samsung Electronics
- * Copyright (C) 2021 XiaoMi, Inc.
  *	MyungJoo Ham <myungjoo.ham@samsung.com>
  */
 
@@ -340,8 +339,6 @@ int update_devfreq(struct devfreq *devfreq)
 	int err = 0;
 	u32 flags = 0;
 
-	if(oops_in_progress)
-		return 0;
 	if (!mutex_is_locked(&devfreq->lock)) {
 		WARN(true, "devfreq->lock must be locked by the caller.\n");
 		return -EINVAL;
@@ -598,8 +595,8 @@ static void devfreq_dev_release(struct device *dev)
 		devfreq->profile->exit(devfreq->dev.parent);
 
 	mutex_destroy(&devfreq->lock);
-	srcu_cleanup_notifier_head(&devfreq->transition_notifier_list);
 	event_mutex_destroy(devfreq);
+	srcu_cleanup_notifier_head(&devfreq->transition_notifier_list);
 	kfree(devfreq);
 }
 

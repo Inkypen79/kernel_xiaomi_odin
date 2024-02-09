@@ -1372,6 +1372,7 @@
   kthread_stop
   kthread_unpark
   kthread_worker_fn
+  ktime_add_safe
   ktime_get
   ktime_get_mono_fast_ns
   ktime_get_real_seconds
@@ -2061,6 +2062,7 @@
   rpmsg_set_signals
   rpmsg_trysend
   rpmsg_unregister_device
+  rpmsg_register_device_override
   rtc_add_group
   rtc_class_close
   rtc_class_open
@@ -2253,6 +2255,7 @@
   snd_card_free_when_closed
   snd_card_new
   snd_card_register
+  snd_compr_use_pause_in_draining
   snd_ctl_add
   snd_ctl_boolean_mono_info
   snd_ctl_enum_info
@@ -2419,6 +2422,7 @@
   strrchr
   strreplace
   strscpy
+  strscpy_pad
   strsep
   strstr
   __sw_hweight32
@@ -2560,6 +2564,7 @@
   ufshcd_remove
   ufshcd_uic_hibern8_enter
   ufshcd_uic_hibern8_exit
+  uhid_hid_driver
   __uio_register_device
   uhid_hid_driver
   uio_unregister_device

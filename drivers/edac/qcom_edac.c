@@ -375,6 +375,7 @@ static int qcom_llcc_edac_probe(struct platform_device *pdev)
 #ifdef CONFIG_EDAC_QCOM_LLCC_PANIC_ON_CE
 	edev_ctl->panic_on_ce = LLCC_ERP_PANIC_ON_CE;
 #endif
+	edev_ctl->pvt_info = llcc_driv_data;
 
 	/* Request for ecc irq */
 	ecc_irq = llcc_driv_data->ecc_irq;

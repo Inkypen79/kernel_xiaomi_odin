@@ -267,6 +267,7 @@ struct mhi_config {
 #define MHI_ENV_VALUE			2
 #define MHI_MASK_ROWS_CH_EV_DB		4
 #define TRB_MAX_DATA_SIZE		8192
+#define TRB_MAX_DATA_SIZE_16K		16384
 #define MHI_CTRL_STATE			100
 
 /* maximum transfer completion events buffer */
@@ -527,6 +528,7 @@ struct mhi_dev {
 
 	uint32_t			*mmio_backup;
 	struct mhi_config		cfg;
+	bool				msi_disable;
 	u32				msi_data;
 	u32				msi_lower;
 	spinlock_t			msi_lock;

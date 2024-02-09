@@ -570,7 +570,7 @@ static ssize_t dwc3_testmode_write(struct file *file,
 	struct dwc3		*dwc = s->private;
 	unsigned long		flags;
 	u32			testmode = 0;
-	char			buf[32] = {};
+	char			buf[32];
 	int			ret;
 
 	if (atomic_read(&dwc->in_lpm)) {
