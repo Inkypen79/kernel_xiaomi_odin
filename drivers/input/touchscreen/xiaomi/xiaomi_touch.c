@@ -359,6 +359,29 @@ struct device_attribute *attr, const char *buf, size_t count)
 	return count;
 }
 
+void update_bump_sample_rate(bool state)
+{
+	struct xiaomi_touch_interface *touch_data;
+
+	if (!touch_pdata)
+		return;
+
+	touch_data = touch_pdata->touch_data[0];
+
+	if(touch_pdata->bump_sample_rate && state) {
+		touch_data->setModeValue(0, 1);
+		touch_data->setModeValue(1, 1);
+		touch_data->setModeValue(3, 34);
+		touch_data->setModeValue(2, 99);
+		touch_data->setModeValue(7, 0);
+	} else {
+		touch_data->resetMode(0);
+	}
+
+	return;
+}
+EXPORT_SYMBOL_GPL(update_bump_sample_rate);
+
 static ssize_t bump_sample_rate_start(struct device *dev,
 struct device_attribute *attr, char *buf)
 {
@@ -371,7 +394,6 @@ static ssize_t bump_sample_rate_store(struct device *dev,
 struct device_attribute *attr, const char *buf, size_t count)
 {
 	struct xiaomi_touch_pdata *pdata = dev_get_drvdata(dev);
-	struct xiaomi_touch_interface *touch_data = pdata->touch_data[0];
 	int input;
 	int ret;
 
@@ -383,16 +405,12 @@ struct device_attribute *attr, const char *buf, size_t count)
 	if(input) {
 		pdata->bump_sample_rate = true;
 		pdata->set_update = true;
-		touch_data->setModeValue(0, 1);
-		touch_data->setModeValue(1, 1);
-		touch_data->setModeValue(3, 34);
-		touch_data->setModeValue(2, 99);
-		touch_data->setModeValue(7, 0);
 	} else {
 		pdata->bump_sample_rate = false;
 		pdata->set_update = false;
-		touch_data->resetMode(0);
 	}
+
+	update_bump_sample_rate(true);
 
 	return count;
 }
