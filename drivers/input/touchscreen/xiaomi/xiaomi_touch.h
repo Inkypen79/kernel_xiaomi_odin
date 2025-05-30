@@ -201,4 +201,6 @@ extern int update_fod_press_status(int value);
 int xiaomi_touch_set_suspend_state(int state);
 
 extern void thp_send_cmd_to_hal(int cmd, int value);
+
+extern void update_bump_sample_rate(bool state);
 #endif
