@@ -1,6 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved
  * Copyright (c) 2016-2021, The Linux Foundation. All rights reserved.
  */
 
@@ -40,7 +39,6 @@
  * @DSI_PIXEL_FORMAT_RGB111:
  * @DSI_PIXEL_FORMAT_RGB332:
  * @DSI_PIXEL_FORMAT_RGB444:
- * @DSI_PIXEL_FORMAT_RGB101010:
  * @DSI_PIXEL_FORMAT_MAX:
  */
 enum dsi_pixel_format {
@@ -51,7 +49,6 @@ enum dsi_pixel_format {
 	DSI_PIXEL_FORMAT_RGB111,
 	DSI_PIXEL_FORMAT_RGB332,
 	DSI_PIXEL_FORMAT_RGB444,
-	DSI_PIXEL_FORMAT_RGB101010,
 	DSI_PIXEL_FORMAT_MAX
 };
 
@@ -266,7 +263,7 @@ enum dsi_dyn_clk_feature_type {
  * @DSI_CMD_SET_MAX
  */
 enum dsi_cmd_set_type {
-	DSI_CMD_SET_PRE_ON = 0,
+	DSI_CMD_SET_PRE_ON,
 	DSI_CMD_SET_ON,
 	DSI_CMD_SET_POST_ON,
 	DSI_CMD_SET_PRE_OFF,
@@ -279,6 +276,7 @@ enum dsi_cmd_set_type {
 	DSI_CMD_SET_POST_CMD_TO_VID_SWITCH,
 	DSI_CMD_SET_VID_TO_CMD_SWITCH,
 	DSI_CMD_SET_POST_VID_TO_CMD_SWITCH,
+	DSI_CMD_SET_PANEL_STATUS_OFFSET,
 	DSI_CMD_SET_PANEL_STATUS,
 	DSI_CMD_SET_LP1,
 	DSI_CMD_SET_LP2,
@@ -289,6 +287,66 @@ enum dsi_cmd_set_type {
 	DSI_CMD_SET_POST_TIMING_SWITCH,
 	DSI_CMD_SET_QSYNC_ON,
 	DSI_CMD_SET_QSYNC_OFF,
+	/* xiaomi add start */
+	DSI_CMD_SET_MI_DIMMINGON,
+	DSI_CMD_SET_MI_DIMMINGOFF,
+	DSI_CMD_SET_MI_HBM_ON,
+	DSI_CMD_SET_MI_HBM_OFF,
+	DSI_CMD_SET_MI_HBM_FOD_ON,
+	DSI_CMD_SET_MI_HBM_FOD_OFF,
+	DSI_CMD_SET_MI_DOZE_HBM,
+	DSI_CMD_SET_MI_DOZE_LBM,
+	DSI_CMD_SET_MI_DOZE_HBM_NOLP,
+	DSI_CMD_SET_MI_DOZE_LBM_NOLP,
+	DSI_CMD_SET_MI_DOZE_NONE_NOLP,
+	DSI_CMD_SET_MI_FLAT_MODE_ON,
+	DSI_CMD_SET_MI_FLAT_MODE_OFF,
+	DSI_CMD_SET_MI_TIMING_SWITCH,
+	DSI_CMD_SET_MI_BL_EXTPULSE_ON,
+	DSI_CMD_SET_MI_BL_EXTPULSE_OFF,
+	DSI_CMD_SET_MI_DC_ON,
+	DSI_CMD_SET_MI_DC_OFF,
+	DSI_CMD_SET_MI_TIMING_SWITCH_DC_LBM,
+	DSI_CMD_SET_MI_TIMING_SWITCH_DC_HBM,
+	DSI_CMD_SET_MI_NOLP,
+	DSI_CMD_SET_MI_CRC_OFF,
+	DSI_CMD_SET_MI_LOCAL_HBM_NORMAL_WHITE_1000NIT,
+	DSI_CMD_SET_MI_LOCAL_HBM_HLPM_WHITE_1000NIT,
+	DSI_CMD_SET_MI_LOCAL_HBM_NORMAL_WHITE_750NIT,
+	DSI_CMD_SET_MI_LOCAL_HBM_NORMAL_WHITE_500NIT,
+	DSI_CMD_SET_MI_LOCAL_HBM_NORMAL_WHITE_110NIT,
+	DSI_CMD_SET_MI_LOCAL_HBM_HLPM_WHITE_110NIT,
+	DSI_CMD_SET_MI_LOCAL_HBM_NORMAL_GREEN_500NIT,
+	DSI_CMD_SET_MI_LOCAL_HBM_OFF_TO_NORMAL,
+	DSI_CMD_SET_MI_LOCAL_HBM_OFF_TO_HBM,
+	DSI_CMD_SET_MI_LOCAL_HBM_OFF_TO_HLPM,
+	DSI_CMD_SET_MI_LOCAL_HBM_OFF_TO_LLPM,
+	DSI_CMD_SET_MI_DEMURA_L1,
+	DSI_CMD_SET_MI_DEMURA_L2,
+	DSI_CMD_SET_MI_DEMURA_L3,
+	DSI_CMD_SET_MI_DEMURA_L4,
+	DSI_CMD_SET_MI_DEMURA_L5,
+	DSI_CMD_SET_MI_DEMURA_L6,
+	DSI_CMD_SET_MI_DC_HBM_ON,
+	DSI_CMD_SET_MI_DC_VI_LBM,
+	DSI_CMD_SET_MI_DC_VI_HBM,
+	DSI_CMD_SET_MI_NATURE_FLAT_MODE_ON,
+	DSI_CMD_SET_MI_NATURE_FLAT_MODE_OFF,
+	DSI_CMD_SET_MI_SPR_1D_RENDERING,
+	DSI_CMD_SET_MI_SPR_2D_RENDERING,
+	DSI_CMD_SET_MI_NOLP_DC_LBM,
+	DSI_CMD_SET_MI_NOLP_DC_HBM,
+	DSI_CMD_SET_MI_COLOR_INVERT_ON,
+	DSI_CMD_SET_MI_COLOR_INVERT_OFF,
+	DSI_CMD_SET_MI_DEMURA_WHEN_DC_OFF,
+	DSI_CMD_SET_MI_DEMURA_WHEN_DC_ON,
+	DSI_CMD_SET_MI_FLAT_MODE_READ_PRE,
+	DSI_CMD_SET_MI_PRE_DOZE_TO_OFF,
+	DSI_CMD_SET_MI_CUP_DBI,
+	DSI_CMD_SET_MI_TIMING_SWITCH_GIR,
+	DSI_CMD_SET_MI_AOD_TO_DC_ON,
+	DSI_CMD_SET_MI_SWITCH_PAGE4,
+	/* xiaomi add end */
 	DSI_CMD_SET_MAX
 };
 
@@ -471,7 +529,6 @@ struct dsi_split_link_config {
  * @append_tx_eot:       Append EOT packets for forward transmissions if set to
  *                       true.
  * @ext_bridge_mode:     External bridge is connected.
- * @ext_bridge_hpd_en:   Enable hpd for external bridge.
  * @force_hs_clk_lane:   Send continuous clock to the panel.
  * @phy_type:            DPHY/CPHY is enabled for this panel.
  * @dsi_split_link_config:  Split Link Configuration.
@@ -502,13 +559,13 @@ struct dsi_host_common_cfg {
 	bool ignore_rx_eot;
 	bool append_tx_eot;
 	bool ext_bridge_mode;
-	bool ext_bridge_hpd_en;
 	bool force_hs_clk_lane;
 	enum dsi_phy_type phy_type;
 	struct dsi_split_link_config split_link;
 	u32 byte_intf_clk_div;
 	u32 dma_sched_line;
 	u32 dma_sched_window;
+	u32 clk_strength;
 };
 
 /**
@@ -745,8 +802,6 @@ static inline int dsi_pixel_format_to_bpp(enum dsi_pixel_format fmt)
 		return 8;
 	case DSI_PIXEL_FORMAT_RGB444:
 		return 12;
-	case DSI_PIXEL_FORMAT_RGB101010:
-		return 30;
 	}
 	return 24;
 }
