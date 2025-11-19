@@ -1,18 +1,22 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved
  * Copyright (c) 2016-2021, The Linux Foundation. All rights reserved.
  */
 
 
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_atomic.h>
+#include <drm/mi_disp_notifier.h>
 
 #include "msm_kms.h"
 #include "sde_connector.h"
 #include "dsi_drm.h"
 #include "sde_trace.h"
+#include "mi_dsi_display.h"
+#include "sde_encoder.h"
 #include "sde_dbg.h"
+#include <linux/pm_wakeup.h>
+#include "msm_drv.h"
 
 #define to_dsi_bridge(x)     container_of((x), struct dsi_bridge, base)
 #define to_dsi_state(x)      container_of((x), struct dsi_connector_state, base)
@@ -28,6 +32,19 @@ static struct dsi_display_mode_priv_info default_priv_info = {
 	.panel_prefill_lines = DEFAULT_PANEL_PREFILL_LINES,
 	.dsc_enabled = false,
 };
+
+#define WAIT_RESUME_TIMEOUT 200
+
+struct dsi_bridge *gbridge;
+static struct delayed_work prim_panel_work;
+static atomic_t prim_panel_is_on;
+static struct wakeup_source *prim_panel_wakelock;
+
+struct dsi_bridge *gsec_bridge;
+static struct delayed_work sec_panel_work;
+static atomic_t sec_panel_is_on;
+static struct wakeup_source *sec_panel_wakelock;
+
 
 static void convert_to_dsi_mode(const struct drm_display_mode *drm_mode,
 				struct dsi_display_mode *dsi_mode)
@@ -169,6 +186,9 @@ static void dsi_bridge_pre_enable(struct drm_bridge *bridge)
 {
 	int rc = 0;
 	struct dsi_bridge *c_bridge = to_dsi_bridge(bridge);
+	struct mi_disp_notifier notify_data;
+	struct mi_dsi_panel_cfg *mi_cfg = NULL;
+	int power_mode = 0;
 
 	if (!bridge) {
 		DSI_ERR("Invalid params\n");
@@ -180,8 +200,8 @@ static void dsi_bridge_pre_enable(struct drm_bridge *bridge)
 		return;
 	}
 
-	if (bridge->encoder->crtc->state->active_changed)
-		atomic_set(&c_bridge->display->panel->esd_recovery_pending, 0);
+	atomic_set(&c_bridge->display->panel->esd_recovery_pending, 0);
+	mi_cfg = &c_bridge->display->panel->mi_cfg;
 
 	/* By this point mode should have been validated through mode_fixup */
 	rc = dsi_display_set_mode(c_bridge->display,
@@ -190,6 +210,40 @@ static void dsi_bridge_pre_enable(struct drm_bridge *bridge)
 		DSI_ERR("[%d] failed to perform a mode set, rc=%d\n",
 		       c_bridge->id, rc);
 		return;
+	}
+
+	power_mode = sde_connector_get_lp(c_bridge->display->drm_conn);
+	notify_data.data = &power_mode;
+	notify_data.disp_id = mi_get_disp_id(c_bridge->display);
+	mi_disp_notifier_call_chain(MI_DISP_DPMS_EARLY_EVENT, &notify_data);
+
+	if ((!strcmp(c_bridge->display->display_type, "primary")) &&
+			atomic_read(&prim_panel_is_on) &&
+			mi_cfg->fp_display_on_optimize) {
+		cancel_delayed_work_sync(&prim_panel_work);
+		__pm_relax(prim_panel_wakelock);
+
+		if (c_bridge->display->panel->panel_mode == DSI_OP_VIDEO_MODE) {
+			DSI_INFO("skip set display config for video panel in fpc\n");
+			return;
+		} else if (c_bridge->display->panel->panel_mode == DSI_OP_CMD_MODE &&
+		    c_bridge->dsi_mode.dsi_mode_flags != DSI_MODE_FLAG_DMS) {
+			DSI_INFO("skip set display config because timming not switch for command panel\n");
+			return;
+		}
+	} else if ((!strcmp(c_bridge->display->display_type, "secondary")) &&
+			atomic_read(&sec_panel_is_on) &&
+			mi_cfg->fp_display_on_optimize) {
+		cancel_delayed_work_sync(&sec_panel_work);
+		__pm_relax(sec_panel_wakelock);
+		if (c_bridge->display->panel->panel_mode == DSI_OP_VIDEO_MODE) {
+			DSI_INFO("skip set display config for video panel in fpc\n");
+			return;
+		} else if (c_bridge->display->panel->panel_mode == DSI_OP_CMD_MODE &&
+		    c_bridge->dsi_mode.dsi_mode_flags != DSI_MODE_FLAG_DMS) {
+			DSI_INFO("skip set display config because timming not switch for command panel\n");
+			return;
+		}
 	}
 
 	if (c_bridge->dsi_mode.dsi_mode_flags &
@@ -216,13 +270,105 @@ static void dsi_bridge_pre_enable(struct drm_bridge *bridge)
 				c_bridge->id, rc);
 		(void)dsi_display_unprepare(c_bridge->display);
 	}
+
 	SDE_ATRACE_END("dsi_display_enable");
 
 	rc = dsi_display_splash_res_cleanup(c_bridge->display);
 	if (rc)
 		DSI_ERR("Continuous splash pipeline cleanup failed, rc=%d\n",
 									rc);
+	if (!strcmp(c_bridge->display->display_type, "primary"))
+		atomic_set(&prim_panel_is_on, true);
+	else if (!strcmp(c_bridge->display->display_type, "secondary"))
+		atomic_set(&sec_panel_is_on, true);
 }
+
+static void mi_dsi_bridge_pre_enable(struct drm_bridge *bridge)
+{
+	struct dsi_bridge *c_bridge = to_dsi_bridge(bridge);
+
+	if (!bridge || !c_bridge) {
+		DSI_ERR("Invalid params\n");
+		return;
+	}
+
+	if (c_bridge->is_dsi_drm_bridge)
+		mutex_lock(&c_bridge->lock);
+
+	dsi_bridge_pre_enable(bridge);
+
+	if (c_bridge->is_dsi_drm_bridge)
+		mutex_unlock(&c_bridge->lock);
+}
+
+/**
+ *  dsi_bridge_interface_enable - Panel light on interface for fingerprint
+ *  In order to improve panel light on performance when unlock device by
+ *  fingerprint, export this interface for fingerprint.Once finger touch
+ *  happened, it could light on LCD panel in advance of android resume.
+ *
+ *  @timeout: DSI bridge wait time for android resume and set panel on.
+ *            If timeout, dsi bridge will disable panel to avoid fingerprint
+ *            touch by mistake.
+ */
+/**
+* fold_status :  0 - unfold status
+*		1 - fold status
+*/
+extern int fold_status;
+
+int dsi_bridge_interface_enable(int timeout)
+{
+	int ret = 0;
+
+	ret = wait_event_timeout(resume_wait_q,
+		!atomic_read(&resume_pending),
+		msecs_to_jiffies(WAIT_RESUME_TIMEOUT));
+	if (!ret) {
+		pr_info("Primary fb resume timeout\n");
+		return -ETIMEDOUT;
+	}
+
+	if (!fold_status) {
+		/* primary dispaly early wakeup */
+		mutex_lock(&gbridge->lock);
+		if (atomic_read(&prim_panel_is_on) || atomic_read(&sec_panel_is_on)) {
+			mutex_unlock(&gbridge->lock);
+			return 0;
+		}
+		__pm_stay_awake(prim_panel_wakelock);
+		gbridge->dsi_mode.dsi_mode_flags = 0;
+		dsi_bridge_pre_enable(&gbridge->base);
+
+		if (timeout > 0)
+			schedule_delayed_work(&prim_panel_work, msecs_to_jiffies(timeout));
+		else
+			__pm_relax(prim_panel_wakelock);
+
+		mutex_unlock(&gbridge->lock);
+	} else {
+		/* secondary dispaly early wakeup */
+		mutex_lock(&gsec_bridge->lock);
+		if (atomic_read(&prim_panel_is_on) || atomic_read(&sec_panel_is_on)) {
+			mutex_unlock(&gsec_bridge->lock);
+			return 0;
+		}
+
+		__pm_stay_awake(sec_panel_wakelock);
+		gsec_bridge->dsi_mode.dsi_mode_flags = 0;
+		dsi_bridge_pre_enable(&gsec_bridge->base);
+
+		if (timeout > 0)
+			schedule_delayed_work(&sec_panel_work, msecs_to_jiffies(timeout));
+		else
+			__pm_relax(sec_panel_wakelock);
+
+		mutex_unlock(&gsec_bridge->lock);
+	}
+
+	return ret;
+}
+EXPORT_SYMBOL(dsi_bridge_interface_enable);
 
 static void dsi_bridge_enable(struct drm_bridge *bridge)
 {
@@ -257,6 +403,12 @@ static void dsi_bridge_enable(struct drm_bridge *bridge)
 			sde_connector_schedule_status_work(display->drm_conn,
 				true);
 	}
+
+	rc = mi_dsi_display_esd_irq_ctrl(c_bridge->display, true);
+	if (rc) {
+		DSI_ERR("[%d] DSI display enable esd irq failed, rc=%d\n",
+				c_bridge->id, rc);
+	}
 }
 
 static void dsi_bridge_disable(struct drm_bridge *bridge)
@@ -273,6 +425,12 @@ static void dsi_bridge_disable(struct drm_bridge *bridge)
 	display = c_bridge->display;
 	private_flags =
 		bridge->encoder->crtc->state->adjusted_mode.private_flags;
+
+	rc = mi_dsi_display_esd_irq_ctrl(c_bridge->display, false);
+	if (rc) {
+		DSI_ERR("[%d] DSI display disable esd irq failed, rc=%d\n",
+				c_bridge->id, rc);
+	}
 
 	if (display)
 		display->enabled = false;
@@ -295,11 +453,26 @@ static void dsi_bridge_post_disable(struct drm_bridge *bridge)
 {
 	int rc = 0;
 	struct dsi_bridge *c_bridge = to_dsi_bridge(bridge);
+	struct mi_disp_notifier notify_data;
+	struct mi_dsi_panel_cfg *mi_cfg = NULL;
+	int power_mode = 0;
 
 	if (!bridge) {
 		DSI_ERR("Invalid params\n");
 		return;
 	}
+
+	if (!c_bridge || !c_bridge->display || !c_bridge->display->panel) {
+		DSI_ERR("Incorrect bridge details\n");
+		return;
+	}
+
+	mi_cfg = &c_bridge->display->panel->mi_cfg;
+
+	power_mode = sde_connector_get_lp(c_bridge->display->drm_conn);
+	notify_data.data = &power_mode;
+	notify_data.disp_id = mi_get_disp_id(c_bridge->display);
+	mi_disp_notifier_call_chain(MI_DISP_DPMS_EARLY_EVENT, &notify_data);
 
 	SDE_ATRACE_BEGIN("dsi_bridge_post_disable");
 	SDE_ATRACE_BEGIN("dsi_display_disable");
@@ -319,7 +492,55 @@ static void dsi_bridge_post_disable(struct drm_bridge *bridge)
 		SDE_ATRACE_END("dsi_bridge_post_disable");
 		return;
 	}
+	mi_disp_notifier_call_chain(MI_DISP_DPMS_EVENT, &notify_data);
 	SDE_ATRACE_END("dsi_bridge_post_disable");
+
+	if (!strcmp(c_bridge->display->display_type, "primary"))
+		atomic_set(&prim_panel_is_on, false);
+	else if (!strcmp(c_bridge->display->display_type, "secondary"))
+		atomic_set(&sec_panel_is_on, false);
+}
+
+static void mi_dsi_bridge_post_disable(struct drm_bridge *bridge)
+{
+	struct dsi_bridge *c_bridge = to_dsi_bridge(bridge);
+
+	if (!bridge || !c_bridge) {
+		DSI_ERR("Invalid params\n");
+		return;
+	}
+
+	if (c_bridge->is_dsi_drm_bridge)
+		mutex_lock(&c_bridge->lock);
+
+	dsi_bridge_post_disable(bridge);
+
+	if (c_bridge->is_dsi_drm_bridge)
+		mutex_unlock(&c_bridge->lock);
+}
+
+static void prim_panel_off_delayed_work(struct work_struct *work)
+{
+	mutex_lock(&gbridge->lock);
+	if (atomic_read(&prim_panel_is_on)) {
+		dsi_bridge_post_disable(&gbridge->base);
+		__pm_relax(prim_panel_wakelock);
+		mutex_unlock(&gbridge->lock);
+		return;
+	}
+	mutex_unlock(&gbridge->lock);
+}
+
+static void sec_panel_off_delayed_work(struct work_struct *work)
+{
+	mutex_lock(&gsec_bridge->lock);
+	if (atomic_read(&sec_panel_is_on)) {
+		dsi_bridge_post_disable(&gsec_bridge->base);
+		__pm_relax(sec_panel_wakelock);
+		mutex_unlock(&gsec_bridge->lock);
+		return;
+	}
+	mutex_unlock(&gsec_bridge->lock);
 }
 
 static void dsi_bridge_mode_set(struct drm_bridge *bridge,
@@ -603,10 +824,10 @@ int dsi_conn_get_mode_info(struct drm_connector *connector,
 static const struct drm_bridge_funcs dsi_bridge_ops = {
 	.attach       = dsi_bridge_attach,
 	.mode_fixup   = dsi_bridge_mode_fixup,
-	.pre_enable   = dsi_bridge_pre_enable,
+	.pre_enable   = mi_dsi_bridge_pre_enable,
 	.enable       = dsi_bridge_enable,
 	.disable      = dsi_bridge_disable,
-	.post_disable = dsi_bridge_post_disable,
+	.post_disable = mi_dsi_bridge_post_disable,
 	.mode_set     = dsi_bridge_mode_set,
 };
 
@@ -750,8 +971,6 @@ int dsi_conn_set_info_blob(struct drm_connector *connector,
 	bpp = dsi_ctrl_pixel_format_to_bpp(fmt);
 
 	sde_kms_info_add_keyint(info, "bit_depth", bpp);
-	if (dsi_display->panel->host_config.ext_bridge_hpd_en)
-		sde_kms_info_add_keystr(info, "ext bridge hpd support", "true");
 
 end:
 	return 0;
@@ -1158,6 +1377,28 @@ struct dsi_bridge *dsi_drm_bridge_init(struct dsi_display *display,
 	}
 
 	encoder->bridge = &bridge->base;
+
+	bridge->is_dsi_drm_bridge = true;
+	mutex_init(&bridge->lock);
+
+	if (!strcmp(display->display_type, "primary")) {
+		gbridge = bridge;
+		atomic_set(&resume_pending, 0);
+		prim_panel_wakelock = wakeup_source_create("prim_panel_wakelock");
+		wakeup_source_add(prim_panel_wakelock);
+		atomic_set(&prim_panel_is_on, false);
+		init_waitqueue_head(&resume_wait_q);
+		INIT_DELAYED_WORK(&prim_panel_work, prim_panel_off_delayed_work);
+	} else if (!strcmp(display->display_type, "secondary")) {
+		gsec_bridge = bridge;
+		atomic_set(&resume_pending, 0);
+		sec_panel_wakelock = wakeup_source_create("sec_panel_wakelock");
+		wakeup_source_add(sec_panel_wakelock);
+		atomic_set(&sec_panel_is_on, false);
+		init_waitqueue_head(&resume_wait_q);
+		INIT_DELAYED_WORK(&sec_panel_work, sec_panel_off_delayed_work);
+	}
+
 	return bridge;
 error_free_bridge:
 	kfree(bridge);
@@ -1169,6 +1410,18 @@ void dsi_drm_bridge_cleanup(struct dsi_bridge *bridge)
 {
 	if (bridge && bridge->base.encoder)
 		bridge->base.encoder->bridge = NULL;
+
+	if (bridge == gbridge) {
+		atomic_set(&prim_panel_is_on, false);
+		cancel_delayed_work_sync(&prim_panel_work);
+		wakeup_source_remove(prim_panel_wakelock);
+		wakeup_source_destroy(prim_panel_wakelock);
+	} else if (bridge == gsec_bridge) {
+		atomic_set(&sec_panel_is_on, false);
+		cancel_delayed_work_sync(&sec_panel_work);
+		wakeup_source_remove(sec_panel_wakelock);
+		wakeup_source_destroy(sec_panel_wakelock);
+	}
 
 	kfree(bridge);
 }

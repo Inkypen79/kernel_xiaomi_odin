@@ -1,5 +1,4 @@
 /*
- * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
  * Copyright (c) 2015-2021, The Linux Foundation. All rights reserved.
  * Copyright (C) 2013 Red Hat
  * Author: Rob Clark <robdclark@gmail.com>
@@ -262,6 +261,8 @@ struct sde_encoder_virt {
 	struct cpumask valid_cpu_mask;
 	struct msm_mode_info mode_info;
 	bool delay_kickoff;
+	bool prepare_kickoff;
+	bool ready_kickoff;
 };
 
 #define to_sde_encoder_virt(x) container_of(x, struct sde_encoder_virt, base)
@@ -524,12 +525,12 @@ bool sde_encoder_is_cwb_disabling(struct drm_encoder *drm_enc,
 	struct drm_crtc *drm_crtc);
 
 /**
- * sde_encoder_get_display_type - returns the display_type of underlying
- *     display
+ * sde_encoder_is_primary_display - checks if underlying display is primary
+ *     display or not.
  * @drm_enc:    Pointer to drm encoder structure
- * @Return:     display_type
+ * @Return:     true if it is primary display. false if secondary display
  */
-u32 sde_encoder_get_display_type(struct drm_encoder *enc);
+bool sde_encoder_is_primary_display(struct drm_encoder *enc);
 
 /**
  * sde_encoder_is_dsi_display - checks if underlying display is DSI
@@ -597,12 +598,6 @@ static inline u32 sde_encoder_get_dfps_maxfps(struct drm_encoder *drm_enc)
  * @drm_enc:	Pointer to drm encoder structure
  */
 void sde_encoder_virt_reset(struct drm_encoder *drm_enc);
-
-/**
- * sde_encoder_cancel_delayed_work - cancel delayed off work for encoder
- * @drm_enc:    Pointer to drm encoder structure
- */
-void sde_encoder_cancel_delayed_work(struct drm_encoder *encoder);
 
 /**
  * sde_encoder_get_kms - retrieve the kms from encoder

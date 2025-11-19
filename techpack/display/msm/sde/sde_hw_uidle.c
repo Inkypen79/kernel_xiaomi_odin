@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  * Copyright (c) 2018-2020, The Linux Foundation. All rights reserved.
  *
  */
@@ -162,7 +161,7 @@ void sde_hw_uidle_setup_ctl(struct sde_hw_uidle *uidle,
 		struct sde_uidle_ctl_cfg *cfg)
 {
 	struct sde_hw_blk_reg_map *c = &uidle->hw;
-	u32 reg_val, fal10_veto_regval = 0;
+	u32 reg_val;
 
 	reg_val = SDE_REG_READ(c, UIDLE_CTL);
 	reg_val = (reg_val & ~BIT(31)) | (cfg->uidle_enable ? BIT(31) : 0);
@@ -177,9 +176,6 @@ void sde_hw_uidle_setup_ctl(struct sde_hw_uidle *uidle,
 		FAL10_EXIT_CNT_MSK);
 
 	SDE_REG_WRITE(c, UIDLE_CTL, reg_val);
-	if (!cfg->uidle_enable)
-		fal10_veto_regval |= (BIT(31) | BIT(0));
-	SDE_REG_WRITE(c, UIDLE_FAL10_VETO_OVERRIDE, fal10_veto_regval);
 }
 
 static void sde_hw_uilde_active_override(struct sde_hw_uidle *uidle,
