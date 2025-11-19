@@ -1517,8 +1517,6 @@ static void sde_kms_complete_commit(struct msm_kms *kms,
 			pr_err("Connector Post kickoff failed rc=%d\n",
 					 rc);
 		}
-
-		sde_connector_fod_post_kickoff(connector);
 	}
 
 	vm_ops = sde_vm_get_ops(sde_kms);
@@ -1798,6 +1796,7 @@ static int _sde_kms_setup_displays(struct drm_device *dev,
 		.get_info   = dp_connector_get_info,
 		.get_mode_info  = dp_connector_get_mode_info,
 		.post_open  = dp_connector_post_open,
+		.set_backlight = dp_connector_set_backlight,
 		.check_status = NULL,
 		.set_colorspace = dp_connector_set_colorspace,
 		.config_hdr = dp_connector_config_hdr,
