@@ -10,6 +10,7 @@
 #include "sde_formats.h"
 #include "dsi_display.h"
 #include "sde_trace.h"
+#include "mi_sde_encoder.h"
 
 #define SDE_DEBUG_VIDENC(e, fmt, ...) SDE_DEBUG("enc%d intf%d " fmt, \
 		(e) && (e)->base.parent ? \
@@ -500,6 +501,8 @@ static void sde_encoder_phys_vid_vblank_irq(void *arg, int irq_idx)
 	hw_ctl = phys_enc->hw_ctl;
 	if (!hw_ctl)
 		return;
+
+	mi_sde_encoder_save_vsync_info(phys_enc);
 
 	SDE_ATRACE_BEGIN("vblank_irq");
 
@@ -1107,41 +1110,12 @@ exit:
 	phys_enc->enable_state = SDE_ENC_DISABLED;
 }
 
-static int sde_encoder_phys_vid_poll_for_active_region(struct sde_encoder_phys *phys_enc)
-{
-	struct sde_encoder_phys_vid *vid_enc;
-	struct intf_timing_params *timing;
-	u32 line_cnt, v_inactive, poll_time_us, trial = 0;
-
-	if (!phys_enc || !phys_enc->hw_intf || !phys_enc->hw_intf->ops.get_line_count)
-		return -EINVAL;
-
-	vid_enc = to_sde_encoder_phys_vid(phys_enc);
-	timing = &vid_enc->timing_params;
-
-	/* if programmable fetch is not enabled return early */
-	if (!programmable_fetch_get_num_lines(vid_enc, timing))
-		return 0;
-
-	poll_time_us = DIV_ROUND_UP(1000000, timing->vrefresh) / MAX_POLL_CNT;
-	v_inactive = timing->v_front_porch + timing->v_back_porch + timing->vsync_pulse_width;
-
-	do {
-		usleep_range(poll_time_us, poll_time_us + 5);
-		line_cnt = phys_enc->hw_intf->ops.get_line_count(phys_enc->hw_intf);
-		trial++;
-	} while ((trial < MAX_POLL_CNT) || (line_cnt < v_inactive));
-
-	return (trial >= MAX_POLL_CNT) ? -ETIMEDOUT : 0;
-}
-
 static void sde_encoder_phys_vid_handle_post_kickoff(
 		struct sde_encoder_phys *phys_enc)
 {
 	unsigned long lock_flags;
 	struct sde_encoder_phys_vid *vid_enc;
 	u32 avr_mode;
-	u32 ret;
 
 	if (!phys_enc) {
 		SDE_ERROR("invalid encoder\n");
@@ -1164,10 +1138,6 @@ static void sde_encoder_phys_vid_handle_post_kickoff(
 				1);
 			spin_unlock_irqrestore(phys_enc->enc_spinlock,
 				lock_flags);
-
-			ret = sde_encoder_phys_vid_poll_for_active_region(phys_enc);
-			if (ret)
-				SDE_DEBUG_VIDENC(vid_enc, "poll for active failed ret:%d\n", ret);
 		}
 		phys_enc->enable_state = SDE_ENC_ENABLED;
 	}
