@@ -1816,7 +1816,7 @@ static ssize_t reverse_chg_state_show(struct class *c,
 			 pst->prop[XM_PROP_REVERSE_CHG_STATE]);
 }
 static CLASS_ATTR_RO(reverse_chg_state);
-#if 0
+#if defined(CONFIG_ODIN_FOR_BUILD)
 static ssize_t wls_fw_state_show(struct class *c,
 					struct class_attribute *attr, char *buf)
 {
@@ -3162,7 +3162,7 @@ static ssize_t adsp_result_show(struct class *c,
 static CLASS_ATTR_RO(adsp_result);
 #endif
 
-#if defined(CONFIG_REDWOOD_FOR_BUILD)
+#if defined(CONFIG_REDWOOD_FOR_BUILD) || defined(CONFIG_ODIN_FOR_BUILD)
 static ssize_t shipmode_count_reset_store(struct class *c,
 					struct class_attribute *attr,
 					const char *buf, size_t count)
@@ -3392,7 +3392,9 @@ static struct attribute *xiaomi_battery_class_attrs[] = {
 	&class_attr_bt_state.attr,
 	&class_attr_reverse_chg_mode.attr,
 	&class_attr_reverse_chg_state.attr,
-	//&class_attr_wls_fw_state.attr,
+#if defined(CONFIG_ODIN_FOR_BUILD)
+	&class_attr_wls_fw_state.attr,
+#endif
 	&class_attr_wireless_chip_fw.attr,
 	&class_attr_wls_bin.attr,
 	&class_attr_rx_vout.attr,
@@ -3466,7 +3468,7 @@ static struct attribute *xiaomi_battery_class_attrs[] = {
 	&class_attr_server_result.attr,
 	&class_attr_adsp_result.attr,
 #endif
-#if defined(CONFIG_REDWOOD_FOR_BUILD)
+#if defined(CONFIG_REDWOOD_FOR_BUILD) || defined(CONFIG_ODIN_FOR_BUILD)
 	&class_attr_shipmode_count_reset.attr,
 	&class_attr_sport_mode.attr,
 	&class_attr_cell1_volt.attr,
@@ -3495,20 +3497,29 @@ void generate_xm_charge_uvent(struct work_struct *work)
 		"POWER_SUPPLY_TX_MAC=\n", //length=20+16
 		"POWER_SUPPLY_RX_CEP=\n", //length=20+16
 		"POWER_SUPPLY_RX_CR=\n", //length=19+8
-		//"POWER_SUPPLY_WLS_FW_STATE=\n",	//length=26+1
+#if defined(CONFIG_ODIN_FOR_BUILD)
+		"POWER_SUPPLY_WLS_FW_STATE=\n",	//length=26+1
+#endif
 		"POWER_SUPPLY_WLS_CAR_ADAPTER=\n", //length=29+1
 #endif
 		"POWER_SUPPLY_SOC_DECIMAL=\n", //length=31+8
 		"POWER_SUPPLY_SOC_DECIMAL_RATE=\n", //length=31+8
 		"POWER_SUPPLY_SHUTDOWN_DELAY=\n", //28+8
+#if !defined(CONFIG_ODIN_FOR_BUILD)
 		"POWER_SUPPLY_VBUS_DISABLE=\n", //length=26+1
+#endif
 	};
 	static char *envp[] = {
 		uevent_string[0],
 		uevent_string[1],
 		uevent_string[2],
+#if !defined(CONFIG_ODIN_FOR_BUILD)
 		uevent_string[3],
+#endif
 #if defined(CONFIG_MI_WIRELESS)
+#if defined(CONFIG_ODIN_FOR_BUILD)
+		uevent_string[3],
+#endif
 		uevent_string[4],
 		uevent_string[5],
 		uevent_string[6],
@@ -3541,7 +3552,22 @@ void generate_xm_charge_uvent(struct work_struct *work)
 
 	rx_cr_show(&(bcdev->battery_class), NULL, prop_buf);
 	strncpy(uevent_string[4] + 19, prop_buf, MAX_UEVENT_LENGTH - 19);
+#if defined(CONFIG_ODIN_FOR_BUILD)
+	wls_fw_state_show( &(bcdev->battery_class), NULL, prop_buf);
+	strncpy(uevent_string[5]+26, prop_buf,MAX_UEVENT_LENGTH-26);
 
+	wls_car_adapter_show(&(bcdev->battery_class), NULL, prop_buf);
+	strncpy(uevent_string[6] + 29, prop_buf, MAX_UEVENT_LENGTH - 29);
+
+	soc_decimal_show(&(bcdev->battery_class), NULL, prop_buf);
+	strncpy(uevent_string[7] + 25, prop_buf, MAX_UEVENT_LENGTH - 25);
+
+	soc_decimal_rate_show(&(bcdev->battery_class), NULL, prop_buf);
+	strncpy(uevent_string[8] + 30, prop_buf, MAX_UEVENT_LENGTH - 30);
+
+	shutdown_delay_show(&(bcdev->battery_class), NULL, prop_buf);
+	strncpy(uevent_string[9] + 28, prop_buf, MAX_UEVENT_LENGTH - 28);
+#else
 	wls_car_adapter_show(&(bcdev->battery_class), NULL, prop_buf);
 	strncpy(uevent_string[5] + 29, prop_buf, MAX_UEVENT_LENGTH - 29);
 
@@ -3556,7 +3582,7 @@ void generate_xm_charge_uvent(struct work_struct *work)
 
 	vbus_disable_show(&(bcdev->battery_class), NULL, prop_buf);
 	strncpy(uevent_string[9] + 26, prop_buf, MAX_UEVENT_LENGTH - 26);
-
+#endif
 	dev_err(bcdev->dev,
 		"uevent test : %s\n %s\n %s\n %s\n %s\n %s\n %s\n %s\n %s\n %s\n",
 		envp[0], envp[1], envp[2], envp[3], envp[4], envp[5], envp[6],

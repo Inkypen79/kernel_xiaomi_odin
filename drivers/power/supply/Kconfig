@@ -460,6 +460,12 @@ config AI_RSOC_M20
 	help
 	  Say Y here to enable create node to get average current and RSOC
 
+config ODIN_FOR_BUILD
+	bool "odin build debug"
+	depends on QTI_BATTERY_CHARGER
+	help
+	  Say Y here to enable odin build debug
+
 config RENOIR_FOR_BUILD
 	bool "renoir build debug"
 	depends on QTI_BATTERY_CHARGER
