@@ -9,6 +9,10 @@
 #include <linux/security.h>
 #include <linux/uaccess.h>
 #include <linux/compat.h>
+#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
+#include <linux/susfs_def.h>
+#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
+
 #include "internal.h"
 
 static int flags_by_mnt(int mnt_flags)
@@ -81,14 +85,41 @@ int vfs_get_fsid(struct dentry *dentry, __kernel_fsid_t *fsid)
 }
 EXPORT_SYMBOL(vfs_get_fsid);
 
+#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
+extern struct vfsmount *susfs_get_non_sus_vfsmnt_from_vfsmnt(struct vfsmount *vfsmnt);
+#endif //#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
+
 int vfs_statfs(const struct path *path, struct kstatfs *buf)
 {
 	int error;
+#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
+	struct vfsmount *no_sus_vfsmnt = NULL;
 
+	if (likely(susfs_is_current_proc_umounted() && path->mnt)) {
+		no_sus_vfsmnt = susfs_get_non_sus_vfsmnt_from_vfsmnt(path->mnt);
+		if (path->mnt == no_sus_vfsmnt) {
+			dput(no_sus_vfsmnt->mnt_root);
+			mntput(no_sus_vfsmnt);
+			goto orig_flow;
+		}
+		error = statfs_by_dentry(no_sus_vfsmnt->mnt_root, buf);
+		if (!error)
+			buf->f_flags = calculate_f_flags(no_sus_vfsmnt);
+		dput(no_sus_vfsmnt->mnt_root);
+		mntput(no_sus_vfsmnt);
+		return error;
+	}
+orig_flow:
 	error = statfs_by_dentry(path->dentry, buf);
 	if (!error)
 		buf->f_flags = calculate_f_flags(path->mnt);
 	return error;
+#else
+	error = statfs_by_dentry(path->dentry, buf);
+	if (!error)
+		buf->f_flags = calculate_f_flags(path->mnt);
+	return error;
+#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
 }
 EXPORT_SYMBOL(vfs_statfs);
 
