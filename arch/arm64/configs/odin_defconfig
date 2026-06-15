@@ -23,7 +23,7 @@ CONFIG_THREAD_INFO_IN_TASK=y
 #
 CONFIG_INIT_ENV_ARG_LIMIT=32
 # CONFIG_COMPILE_TEST is not set
-CONFIG_LOCALVERSION="-inkypen-v2"
+CONFIG_LOCALVERSION="-inkypen-resuki-v2"
 # CONFIG_LOCALVERSION_AUTO is not set
 CONFIG_BUILD_SALT=""
 CONFIG_DEFAULT_HOSTNAME="(none)"
@@ -5908,6 +5908,59 @@ CONFIG_INTERCONNECT_QCOM_RPMH=y
 CONFIG_INTERCONNECT_QCOM_QOS=y
 # CONFIG_COUNTER is not set
 CONFIG_NXP_SR100=m
+
+#
+# KernelSU
+#
+CONFIG_KSU=y
+# CONFIG_KSU_DEBUG is not set
+# CONFIG_KSU_TOOLKIT_SUPPORT is not set
+CONFIG_KSU_FULL_NAME_FORMAT="%TAG_NAME%-%COMMIT_SHA%@%REPO_NAME%"
+# CONFIG_KSU_DISABLE_MANAGER is not set
+# CONFIG_KSU_DISABLE_POLICY is not set
+CONFIG_KSU_MULTI_MANAGER_SUPPORT=y
+# CONFIG_KSU_TRACEPOINT_HOOK is not set
+# CONFIG_KSU_MANUAL_HOOK is not set
+CONFIG_KSU_SUSFS=y
+
+#
+# KernelSU - SUSFS
+#
+
+#
+# ------------------------WARNING-------------------------------
+#
+
+#
+# ReSukiSU will check EVERY hooks in kernel compile process
+#
+
+#
+# If anything mismatch with simonpunk's patch, Kernel compile maybe FAILED!
+#
+
+#
+# See simonpunk's original patch if you face any compile failed due to hook check
+#
+
+#
+# Repo: https://gitlab.com/simonpunk/susfs4ksu
+#
+
+#
+# --------------------------------------------------------------
+#
+CONFIG_KSU_SUSFS_SUS_PATH=y
+CONFIG_KSU_SUSFS_SUS_MOUNT=y
+CONFIG_KSU_SUSFS_SUS_KSTAT=y
+CONFIG_KSU_SUSFS_SPOOF_UNAME=y
+CONFIG_KSU_SUSFS_ENABLE_LOG=y
+CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
+CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
+CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
+CONFIG_KSU_SUSFS_SUS_MAP=y
+# end of KernelSU - SUSFS
+# end of KernelSU
 # end of Device Drivers
 
 #
