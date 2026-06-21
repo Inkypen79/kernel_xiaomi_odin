@@ -121,24 +121,9 @@ static int sde_backlight_device_update_status(struct backlight_device *bd)
 
 	if (c_conn->connector_type == DRM_MODE_CONNECTOR_DSI) {
 		dsi_display = (struct dsi_display *) c_conn->display;
+		bl_max_level = dsi_display->panel->bl_config.bl_max_level;
 		brightness_max_level =
 			dsi_display->panel->bl_config.brightness_max_level;
-
-		if (brightness > brightness_max_level)
-			brightness = brightness_max_level;
-		if (brightness > c_conn->thermal_max_brightness)
-			brightness = c_conn->thermal_max_brightness;
-
-		if (brightness) {
-			int bl_min = dsi_display->panel->bl_config.bl_min_level ? : 1;
-			int bl_range = dsi_display->panel->bl_config.bl_max_level - bl_min;
-
-			/* map UI brightness into driver backlight level rounding it */
-			bl_lvl = bl_min + DIV_ROUND_CLOSEST((brightness - 1) * bl_range,
-				dsi_display->panel->bl_config.brightness_max_level - 1);
-		} else {
-			bl_lvl = 0;
-		}
 	} else if (c_conn->connector_type == DRM_MODE_CONNECTOR_eDP) {
 		dp_panel = (struct dp_panel *) c_conn->drv_panel;
 		if (dp_panel) {
@@ -146,21 +131,21 @@ static int sde_backlight_device_update_status(struct backlight_device *bd)
 			brightness_max_level =
 				dp_panel->bl_config.brightness_max_level;
 		}
-
-		if (brightness > bl_max_level)
-			brightness = bl_max_level;
-		if (brightness > c_conn->thermal_max_brightness)
-			brightness = c_conn->thermal_max_brightness;
-
-		/* map UI brightness into driver backlight level with rounding */
-		bl_lvl = mult_frac(brightness, bl_max_level, brightness_max_level);
-
-		if (!bl_lvl && brightness)
-			bl_lvl = 1;
 	}
 
-	if (!dsi_display->panel->bl_config.allow_bl_update) {
-		dsi_display->panel->bl_config.unset_bl_level = bl_lvl;
+	if (brightness > bl_max_level)
+		brightness = bl_max_level;
+	if (brightness > c_conn->thermal_max_brightness)
+		brightness = c_conn->thermal_max_brightness;
+
+	/* map UI brightness into driver backlight level with rounding */
+	bl_lvl = mult_frac(brightness, bl_max_level, brightness_max_level);
+
+	if (!bl_lvl && brightness)
+		bl_lvl = 1;
+
+	if (!c_conn->allow_bl_update) {
+		c_conn->unset_bl_level = bl_lvl;
 		return 0;
 	}
 
@@ -182,7 +167,7 @@ static int sde_backlight_device_update_status(struct backlight_device *bd)
 		}
 		rc = c_conn->ops.set_backlight(&c_conn->base,
 				c_conn->display, bl_lvl);
-		dsi_display->panel->bl_config.unset_bl_level = 0;
+		c_conn->unset_bl_level = 0;
 	}
 
 done:
@@ -712,18 +697,17 @@ static int _sde_connector_update_bl_scale(struct sde_connector *c_conn)
 			return -EINVAL;
 		}
 		dsi_bl_config = &dsi_display->panel->bl_config;
-		if (!dsi_bl_config->allow_bl_update) {
-			dsi_bl_config->unset_bl_level = dsi_bl_config->bl_level;
+		if (!c_conn->allow_bl_update) {
+			c_conn->unset_bl_level = dsi_bl_config->bl_level;
 			return 0;
 		}
 		dsi_bl_config->bl_scale = bl_scale;
 		dsi_bl_config->bl_scale_sv = bl_scale_sv;
-		if (dsi_bl_config->unset_bl_level)
-			dsi_bl_config->bl_level = dsi_bl_config->unset_bl_level;
+		if (c_conn->unset_bl_level)
+			dsi_bl_config->bl_level = c_conn->unset_bl_level;
 
 		rc = c_conn->ops.set_backlight(&c_conn->base,
 				dsi_display, dsi_bl_config->bl_level);
-		dsi_bl_config->unset_bl_level = 0;
 	} else if (c_conn->connector_type == DRM_MODE_CONNECTOR_eDP) {
 		dp_display = c_conn->display;
 		dp_panel = (struct dp_panel *) c_conn->drv_panel;
@@ -739,10 +723,11 @@ static int _sde_connector_update_bl_scale(struct sde_connector *c_conn)
 				dp_bl_config->bl_level = c_conn->unset_bl_level;
 			rc = c_conn->ops.set_backlight(&c_conn->base,
 					dp_display, dp_bl_config->bl_level);
-			c_conn->unset_bl_level = 0;
 		} else
 			SDE_ERROR("Invalid dp_panel null\n");
 	}
+
+	c_conn->unset_bl_level = 0;
 
 	return rc;
 }
@@ -831,8 +816,6 @@ static int _sde_connector_update_dirty_properties(
 {
 	struct sde_connector *c_conn;
 	struct sde_connector_state *c_state;
-	struct dsi_display *dsi_display = NULL;
-	struct dsi_backlight_config *bl_config = NULL;
 	int idx;
 
 	if (!connector) {
@@ -842,13 +825,6 @@ static int _sde_connector_update_dirty_properties(
 
 	c_conn = to_sde_connector(connector);
 	c_state = to_sde_connector_state(connector->state);
-
-	if (c_conn->connector_type == DRM_MODE_CONNECTOR_DSI) {
-		dsi_display = c_conn->display;
-
-		if (dsi_display && dsi_display->panel)
-			bl_config = &dsi_display->panel->bl_config;
-	}
 
 	mutex_lock(&c_conn->property_info.property_lock);
 	while ((idx = msm_property_pop_dirty(&c_conn->property_info,
@@ -881,8 +857,7 @@ static int _sde_connector_update_dirty_properties(
 	 * Special handling for postproc properties and
 	 * for updating backlight if any unset backlight level is present
 	 */
-	if (c_conn->bl_scale_dirty || c_conn->unset_bl_level ||
-			(bl_config && bl_config->unset_bl_level)) {
+	if (c_conn->bl_scale_dirty || c_conn->unset_bl_level) {
 		_sde_connector_update_bl_scale(c_conn);
 		c_conn->bl_scale_dirty = false;
 	}
@@ -900,81 +875,6 @@ struct sde_connector_dyn_hdr_metadata *sde_connector_get_dyn_hdr_meta(
 
 	c_state = to_sde_connector_state(connector->state);
 	return &c_state->dyn_hdr_meta;
-}
-
-void sde_connector_fod_pre_kickoff(struct drm_connector *connector)
-{
-	struct sde_connector *c_conn;
-	struct dsi_display *display;
-	struct dsi_panel *panel;
-	int rc;
-
-	if (!connector)
-		return;
-
-	c_conn = to_sde_connector(connector);
-	if (c_conn->connector_type != DRM_MODE_CONNECTOR_DSI)
-		return;
-
-	display = (struct dsi_display *) c_conn->display;
-	if (!display)
-		return;
-
-	if (display->display_selection_type != DSI_PRIMARY)
-		return;
-
-	panel = display->panel;
-	if (!panel)
-		return;
-
-	if (dsi_panel_is_fod_hbm_applied(panel))
-		return;
-
-	rc = dsi_panel_apply_requested_fod_hbm(panel);
-	if (rc)
-		return;
-
-	if (!dsi_panel_get_fod_hbm(panel))
-		dsi_panel_set_fod_ui(panel, 0);
-}
-
-void sde_connector_fod_post_kickoff(struct drm_connector *connector)
-{
-	static bool old_fod_hbm_enabled = false;
-	struct sde_connector *c_conn;
-	struct dsi_display *display;
-	struct dsi_panel *panel;
-	bool fod_hbm_enabled;
-
-	if (!connector)
-		return;
-
-	c_conn = to_sde_connector(connector);
-	if (c_conn->connector_type != DRM_MODE_CONNECTOR_DSI)
-		return;
-
-	display = (struct dsi_display *) c_conn->display;
-	if (!display)
-		return;
-
-	if (display->display_selection_type != DSI_PRIMARY)
-		return;
-
-	panel = display->panel;
-	if (!panel)
-		return;
-
-	if (!dsi_panel_is_fod_hbm_applied(panel))
-		return;
-
-	fod_hbm_enabled = dsi_panel_get_fod_hbm(panel);
-	if (fod_hbm_enabled && fod_hbm_enabled != old_fod_hbm_enabled) {
-		sde_encoder_wait_for_event(c_conn->encoder, MSM_ENC_TX_COMPLETE);
-		sde_encoder_wait_for_event(c_conn->encoder, MSM_ENC_VBLANK);
-		dsi_panel_set_fod_ui(panel, 1);
-	}
-
-	old_fod_hbm_enabled = fod_hbm_enabled;
 }
 
 int sde_connector_pre_kickoff(struct drm_connector *connector)
@@ -1021,8 +921,6 @@ int sde_connector_pre_kickoff(struct drm_connector *connector)
 	params.hdr_meta = &c_state->hdr_meta;
 
 	SDE_EVT32_VERBOSE(connector->base.id);
-
-	sde_connector_fod_pre_kickoff(connector);
 
 	rc = c_conn->ops.pre_kickoff(connector, c_conn->display, &params);
 
@@ -1073,7 +971,7 @@ void sde_connector_helper_bridge_disable(struct drm_connector *connector)
 {
 	int rc;
 	struct sde_connector *c_conn = NULL;
-	struct dsi_display *display = NULL;
+	struct dsi_display *display;
 	bool poms_pending = false;
 	struct sde_kms *sde_kms;
 
@@ -1106,8 +1004,7 @@ void sde_connector_helper_bridge_disable(struct drm_connector *connector)
 		backlight_update_status(c_conn->bl_device);
 	}
 
-	if (display && display->panel)
-		display->panel->bl_config.allow_bl_update = false;
+	c_conn->allow_bl_update = false;
 }
 
 void sde_connector_helper_bridge_enable(struct drm_connector *connector)
@@ -1140,7 +1037,7 @@ void sde_connector_helper_bridge_enable(struct drm_connector *connector)
 					MSM_ENC_TX_COMPLETE);
 	}
 
-	display->panel->bl_config.allow_bl_update = true;
+	c_conn->allow_bl_update = true;
 
 	if (!sde_in_trusted_vm(sde_kms) && c_conn->bl_device) {
 		c_conn->bl_device->props.power = FB_BLANK_UNBLANK;

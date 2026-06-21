@@ -204,12 +204,9 @@ struct dsi_display {
 	struct drm_device *drm_dev;
 	struct drm_connector *drm_conn;
 	struct drm_connector *ext_conn;
-	struct class *class;
-	struct device *dev;
 
 	const char *name;
 	const char *display_type;
-	enum dsi_display_selection_type display_selection_type;
 	struct list_head list;
 	bool is_cont_splash_enabled;
 	bool sw_te_using_wd;
