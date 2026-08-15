@@ -1718,7 +1718,7 @@ static const struct nl80211_vendor_cmd_info wlan_hdd_cfg80211_vendor_events[] = 
 };
 
 /**
- * __is_driver_dfs_capable() - get driver DFS capability
+ * __is_driver_dfs_capable() - get driver DFS offload capability
  * @wiphy:   pointer to wireless wiphy structure.
  * @wdev:    pointer to wireless_dev structure.
  * @data:    Pointer to the data to be passed via vendor interface
@@ -17744,7 +17744,7 @@ void wlan_hdd_update_wiphy(struct hdd_context *hdd_ctx)
 {
 	int value;
 	bool fils_enabled, mac_spoofing_enabled;
-	bool dfs_master_capable = true, is_oce_sta_enabled = false;
+	bool is_oce_sta_enabled = false;
 	QDF_STATUS status;
 	struct wiphy *wiphy = hdd_ctx->wiphy;
 	uint8_t allow_mcc_go_diff_bi = 0, enable_mcc = 0;
@@ -17769,11 +17769,7 @@ void wlan_hdd_update_wiphy(struct hdd_context *hdd_ctx)
 	if (fils_enabled)
 		wlan_hdd_cfg80211_set_wiphy_fils_feature(wiphy);
 
-	status = ucfg_mlme_get_dfs_master_capability(hdd_ctx->psoc,
-						     &dfs_master_capable);
-	if (QDF_IS_STATUS_SUCCESS(status) && dfs_master_capable)
-		wlan_hdd_cfg80211_set_dfs_offload_feature(wiphy);
-
+	wlan_hdd_cfg80211_set_dfs_offload_feature(wiphy);
 
 	status = ucfg_mlme_get_bigtk_support(hdd_ctx->psoc,
 					     &is_bigtk_supported);

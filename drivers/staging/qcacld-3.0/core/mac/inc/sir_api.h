@@ -786,6 +786,7 @@ struct bss_description {
 #if defined(WLAN_SAE_SINGLE_PMK) && defined(WLAN_FEATURE_ROAM_OFFLOAD)
 	uint32_t is_single_pmk;
 #endif
+	uint16_t neg_rsn_caps;
 	/* Please keep the structure 4 bytes aligned above the ieFields */
 	uint32_t ieFields[1];
 };

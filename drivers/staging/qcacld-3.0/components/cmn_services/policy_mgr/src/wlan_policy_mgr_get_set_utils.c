@@ -181,6 +181,45 @@ policy_mgr_get_sta_sap_scc_on_dfs_chnl(struct wlan_objmgr_psoc *psoc,
 	return QDF_STATUS_SUCCESS;
 }
 
+bool
+policy_mgr_is_bonded_chan_dfs(struct wlan_objmgr_psoc *psoc,
+			      enum phy_ch_width ch_width,
+			      qdf_freq_t mhz_freq_seg1,
+			      uint32_t chan_freq)
+{
+	bool is_ch_dfs = false;
+	struct policy_mgr_psoc_priv_obj *pm_ctx;
+
+	pm_ctx = policy_mgr_get_context(psoc);
+	if (!pm_ctx) {
+		policy_mgr_err("pm_ctx is NULL");
+		return false;
+	}
+
+	if (ch_width == CH_WIDTH_160MHZ) {
+		if (wlan_reg_get_5g_bonded_channel_state_for_freq(pm_ctx->pdev,
+								  chan_freq,
+								  ch_width)
+				== CHANNEL_STATE_DFS)
+			is_ch_dfs = true;
+	} else if (ch_width == CH_WIDTH_80P80MHZ) {
+		if (wlan_reg_get_channel_state_for_freq(
+					pm_ctx->pdev,
+					chan_freq) ==
+				CHANNEL_STATE_DFS ||
+			wlan_reg_get_channel_state_for_freq(
+					pm_ctx->pdev,
+					mhz_freq_seg1) ==
+				CHANNEL_STATE_DFS)
+			is_ch_dfs = true;
+	} else {
+		if (wlan_reg_is_dfs_for_freq(pm_ctx->pdev, chan_freq))
+			is_ch_dfs = true;
+	}
+
+	return is_ch_dfs;
+}
+
 static bool
 policy_mgr_update_dfs_master_dynamic_enabled(
 	struct wlan_objmgr_psoc *psoc, uint8_t vdev_id)

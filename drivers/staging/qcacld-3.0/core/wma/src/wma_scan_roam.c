@@ -1617,21 +1617,23 @@ int wma_roam_synch_event_handler(void *handle, uint8_t *event,
 		return status;
 	}
 
+	wma_prevent_pm_during_roam_sync(wma);
+
 	param_buf = (WMI_ROAM_SYNCH_EVENTID_param_tlvs *)event;
 	if (!param_buf) {
 		wma_err_rl("received null buf from target");
-		return status;
+		goto fail;
 	}
 	synch_event = param_buf->fixed_param;
 	if (!synch_event) {
 		wma_err_rl("received null event data from target");
-		return status;
+		goto fail;
 	}
 
 	if (synch_event->vdev_id >= wma->max_bssid) {
 		wma_err_rl("received invalid vdev_id %d",
 			   synch_event->vdev_id);
-		return status;
+		goto fail;
 	}
 
 	iface = &wma->interfaces[synch_event->vdev_id];
@@ -1647,10 +1649,14 @@ int wma_roam_synch_event_handler(void *handle, uint8_t *event,
 	if (QDF_IS_STATUS_ERROR(qdf_status)) {
 		wma_err("Failed to send the EV_ROAM");
 		wma_post_roam_sync_failure(wma, synch_event->vdev_id);
-		return status;
+		goto fail;
 	}
 	wma_debug("Posted EV_ROAM to VDEV SM");
 	return 0;
+
+fail:
+	wma_allow_pm_after_roam_sync(wma);
+	return status;
 }
 
 int wma_roam_auth_offload_event_handler(WMA_HANDLE handle, uint8_t *event,
@@ -2064,7 +2070,7 @@ wma_rso_print_scan_info(struct wmi_roam_scan_data *scan, uint8_t vdev_id,
 
 	tmp = buf;
 	/* For partial scans, print the channel info */
-	if (!scan->type) {
+	if (scan->type == ROAM_STATS_SCAN_TYPE_PARTIAL) {
 		buf_cons = qdf_snprint(tmp, buf_left, "{");
 		buf_left -= buf_cons;
 		tmp += buf_cons;
@@ -2833,6 +2839,7 @@ void wma_process_roam_synch_complete(WMA_HANDLE handle, uint8_t vdev_id)
 	wma_info("LFR3: vdev[%d] Sent ROAM_SYNCH_COMPLETE", vdev_id);
 	wlan_roam_debug_log(vdev_id, DEBUG_ROAM_SYNCH_CNF,
 			    DEBUG_INVALID_PEER_ID, NULL, NULL, 0, 0);
+	wma_allow_pm_after_roam_sync(wma_handle);
 
 }
 #endif /* WLAN_FEATURE_ROAM_OFFLOAD */
@@ -4551,10 +4558,12 @@ static void wma_invalid_roam_reason_handler(tp_wma_handle wma_handle,
 	if (notif == WMI_ROAM_NOTIF_ROAM_START) {
 		wma_handle->interfaces[vdev_id].roaming_in_progress = true;
 		op_code = SIR_ROAMING_START;
+		wma_prevent_pm_during_roam_sync(wma_handle);
 	} else if (notif == WMI_ROAM_NOTIF_ROAM_ABORT) {
 		wma_handle->interfaces[vdev_id].roaming_in_progress = false;
 		op_code = SIR_ROAMING_ABORT;
 		lim_sae_auth_cleanup_retry(wma_handle->mac_context, vdev_id);
+		wma_allow_pm_after_roam_sync(wma_handle);
 	} else {
 		wma_debug("Invalid notif %d", notif);
 		return;
@@ -4730,6 +4739,7 @@ int wma_roam_event_callback(WMA_HANDLE handle, uint8_t *event_buf,
 									= false;
 		lim_sae_auth_cleanup_retry(wma_handle->mac_context,
 					   wmi_event->vdev_id);
+		wma_allow_pm_after_roam_sync(wma_handle);
 		break;
 #endif
 	case WMI_ROAM_REASON_INVALID:

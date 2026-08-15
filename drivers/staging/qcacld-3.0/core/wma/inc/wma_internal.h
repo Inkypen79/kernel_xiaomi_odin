@@ -1588,6 +1588,23 @@ void wma_acquire_wakelock(qdf_wake_lock_t *wl, uint32_t msec);
 void wma_release_wakelock(qdf_wake_lock_t *wl);
 
 /**
+ * wma_prevent_pm_during_roam_sync() - prevent runtime PM during roam sync
+ * @wma: a reference to the global WMA handle
+ *
+ * Return: None
+ */
+void wma_prevent_pm_during_roam_sync(t_wma_handle *wma);
+
+/**
+ * wma_allow_pm_after_roam_sync() -  allow runtime PM after roam
+ * sync complete
+ * @wma: a reference to the global WMA handle
+ *
+ * Return: None
+ */
+void wma_allow_pm_after_roam_sync(t_wma_handle *wma);
+
+/**
  * wma_send_vdev_stop_to_fw() - send the vdev stop command to firmware
  * @wma: a reference to the global WMA handle
  * @vdev_id: the Id of the vdev to stop

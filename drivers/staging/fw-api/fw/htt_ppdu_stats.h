@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2017-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2026 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -501,6 +501,11 @@ enum HTT_PPDU_STATS_SEQ_TYPE {
     HTT_SEQTYPE_BE_UL_MU_OFDMA_TRIG = 13,
     HTT_SEQTYPE_BE_UL_MU_MIMO_TRIG  = 14,
     HTT_SEQTYPE_BE_UL_BSR_TRIG      = 15,
+    HTT_SEQTYPE_BN_MU_MIMO          = 16,
+    HTT_SEQTYPE_BN_MU_OFDMA         = 17,
+    HTT_SEQTYPE_BN_UL_MU_OFDMA_TRIG = 18,
+    HTT_SEQTYPE_BN_UL_MU_MIMO_TRIG  = 19,
+    HTT_SEQTYPE_BN_UL_BSR_TRIG      = 20,
 };
 typedef enum HTT_PPDU_STATS_SEQ_TYPE HTT_PPDU_STATS_SEQ_TYPE;
 
@@ -962,7 +967,16 @@ typedef struct {
      * BIT [3 : 3] - is_combined_ul_bsrp_trigger - Flag to indicate if a
      *               given UL BSRP trigger is sent combined as part of
      *               an existing DL/UL data sequence
-     * BIT [31: 4] - reserved
+     * BIT [4 : 4] - is_sta_dps_seq - Flag to indicate if a TX is to a STA with
+     *               active Dynamic Power Save state (DPS)
+     * BIT [5 : 5] - is_allow_comb_sched_cmd - Flag to indicate if a given TX
+     *               is part of a allowed combined sched_cmd sequence
+     * BIT [6 : 6] - is_abort_comb_sched_cmd - Flag to indicate if a given TX
+     *               is part of a aborted combined sched_cmd sequence
+     * BIT [7 : 7] - is_comb_sched_cmd_pending - Flag to indicate if a the
+     *               first sched_cmd of a combined sched_cmd sequence is
+     *               pending in the current ring.
+     * BIT [31: 8] - reserved
      */
     union {
         A_UINT32 reserved__htt_seq_type;
@@ -971,11 +985,31 @@ typedef struct {
                      is_combined_ul_basic_trigger: 1,
                      is_manual_ulofdma_trigger: 1,
                      is_combined_ul_bsrp_trigger: 1,
-                     reserved3:     28;
+                     is_sta_dps_seq: 1,
+                     is_allow_comb_sched_cmd: 1,
+                     is_abort_comb_sched_cmd: 1,
+                     is_comb_sched_cmd_pending: 1,
+                     is_sched_cmd_combined: 1,
+                     reserved3:     23;
         };
     };
     /* Flag to indicate if the channel chosen is 320_1 / 320_2 */
     A_UINT32 chan_type_320mhz;
+
+    /*
+     * BIT [15 :  0] - obss_dur_us reports the remaining OBSS dur when
+     *                 this FES started OTA.
+     * BIT [16 : 16] - oprim indicates M/O primary FES.
+     * BIT [31 : 17] - reserved
+     */
+    union {
+        A_UINT32 reserved__oprim__obss_dur;
+        struct {
+            A_UINT32 obss_dur_us: 16,
+                     oprim:        1,
+                     reserved4:   15;
+        };
+    };
 } htt_ppdu_stats_common_tlv;
 
 #define HTT_PPDU_STATS_USER_COMMON_TLV_TID_NUM_M     0x000000ff
@@ -1940,6 +1974,32 @@ typedef enum HTT_PPDU_STATS_RESP_PPDU_TYPE HTT_PPDU_STATS_RESP_PPDU_TYPE;
         ((_var) |= ((_val) << HTT_PPDU_STATS_USER_RATE_TLV_IS_MIN_RATE_S)); \
     } while (0)
 
+#define HTT_PPDU_STATS_USER_RATE_TLV_2xLDPC_M  0x00040000
+#define HTT_PPDU_STATS_USER_RATE_TLV_2xLDPC_S          18
+
+#define HTT_PPDU_STATS_USER_RATE_TLV_2xLDPC_GET(_var) \
+    (((_var) & HTT_PPDU_STATS_USER_RATE_TLV_2xLDPC_M) >> \
+    HTT_PPDU_STATS_USER_RATE_TLV_2xLDPC_S)
+
+#define HTT_PPDU_STATS_USER_RATE_TLV_2xLDPC_SET (_var , _val) \
+    do { \
+        HTT_CHECK_SET_VAL(HTT_PPDU_STATS_USER_RATE_TLV_2XLDPC, _val); \
+        ((_var) |= ((_val) << HTT_PPDU_STATS_USER_RATE_TLV_2xLDPC_S)); \
+    } while (0)
+
+#define HTT_PPDU_STATS_USER_RATE_TLV_IS_NPCA_ENABLED_M  0x00080000
+#define HTT_PPDU_STATS_USER_RATE_TLV_IS_NPCA_ENABLED_S          19
+
+#define HTT_PPDU_STATS_USER_RATE_TLV_IS_NPCA_ENABLED_GET(_var) \
+    (((_var) & HTT_PPDU_STATS_USER_RATE_TLV_IS_NPCA_ENABLED_M) >> \
+    HTT_PPDU_STATS_USER_RATE_TLV_IS_NPCA_ENABLED_S)
+
+#define HTT_PPDU_STATS_USER_RATE_TLV_IS_NPCA_ENABLED_SET (_var , _val) \
+    do { \
+        HTT_CHECK_SET_VAL(HTT_PPDU_STATS_USER_RATE_TLV_IS_NPCA_ENABLED, _val); \
+        ((_var) |= ((_val) << HTT_PPDU_STATS_USER_RATE_TLV_IS_NPCA_ENABLED_S)); \
+    } while (0)
+
 typedef enum HTT_PPDU_STATS_RU_SIZE {
     HTT_PPDU_STATS_RU_26,
     HTT_PPDU_STATS_RU_52,
@@ -1958,6 +2018,14 @@ typedef enum HTT_PPDU_STATS_RU_SIZE {
     HTT_PPDU_STATS_RU_996x3_484,
     HTT_PPDU_STATS_RU_996x4,
 } HTT_PPDU_STATS_RU_SIZE;
+
+typedef enum HTT_PPDU_STATS_DRU_SIZE {
+    HTT_PPDU_STATS_DRU_26,
+    HTT_PPDU_STATS_DRU_52,
+    HTT_PPDU_STATS_DRU_106,
+    HTT_PPDU_STATS_DRU_242,
+    HTT_PPDU_STATS_DRU_484,
+} HTT_PPDU_STATS_DRU_SIZE;
 
 typedef struct {
     htt_tlv_hdr_t tlv_hdr;
@@ -1996,6 +2064,7 @@ typedef struct {
      * Discriminant is field ru_format:
      *     - ru_format = 0: ru_end, ru_start
      *     - ru_format = 1: ru_index, ru_size
+     *     - ru_format = 2: dru_index, dru_size, dru_sbw, dru_sbw_idx
      *     - ru_format = other: reserved for future expansion
      *
      * ru_start and ru_end are RU 26 indices
@@ -2028,10 +2097,15 @@ typedef struct {
      *
      * resp_ru_size is an HTT_PPDU_STATS_RU_SIZE, resp_ru_index
      * is a size specific index for the given ru_size.
+     *
+     * 'is_dru' field indicates if the current RU allocation
+     * is a distributed RU allocation or not.
+     * 'dru_sbw' is the spreading BW size of current dru_size.
      */
     union {
         A_UINT32 resp_ru_start__ru_end;
         A_UINT32 resp_ru_size__ru_index;
+        A_UINT32 dru_size__dru_index__dru_sbw_idx__dru_sbw__is_dru;
         struct {
             A_UINT32 resp_ru_end:   16,
                      resp_ru_start: 16;
@@ -2039,6 +2113,14 @@ typedef struct {
         struct {
             A_UINT32 resp_ru_index: 16,
                      resp_ru_size:  16;
+        };
+        struct {
+            A_UINT32 is_dru:         1,
+                     dru_sbw:        3,
+                     dru_sbw_idx:    2,
+                     dru_index:     16,
+                     dru_size:       4,
+                     reserved5:       6;
         };
     };
 
@@ -2127,11 +2209,16 @@ typedef struct {
      *                punctured.
      * BIT 16      :- flag showing whether EHT extra LTF is applied
      *                for current PPDU
+     * BIT 17      :- flag to show is_min_rate
+     * BIT 18      :- flag showing whether PPDU is transmitted with 2xLDPC
+     * BIT 19      :- flag showing whether PPDU is transmitted with NPCA enabled
      */
     A_UINT32 punc_pattern_bitmap: 16,
-             extra_eht_ltf:       1,
-             is_min_rate:         1,
-             reserved4:           14;
+             extra_eht_ltf:        1,
+             is_min_rate:          1,
+             is_2xldpc:            1,
+             is_npca_enabled:      1,
+             reserved4:           12;
 } htt_ppdu_stats_user_rate_tlv;
 
 #define HTT_PPDU_STATS_USR_RATE_VALID_M     0x80000000

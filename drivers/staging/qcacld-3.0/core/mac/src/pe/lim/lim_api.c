@@ -2631,6 +2631,10 @@ pe_roam_synch_callback(struct mac_context *mac_ctx,
 	lim_fill_ft_session(mac_ctx, bss_desc, ft_session_ptr,
 			    session_ptr, roam_sync_ind_ptr->phy_mode);
 	pe_update_crypto_params(mac_ctx, ft_session_ptr, roam_sync_ind_ptr);
+
+	/* Reset the SPMK global cache */
+	wlan_mlme_set_sae_single_pmk_bss_cap(mac_ctx->psoc,
+					     ft_session_ptr->vdev_id, false);
 	/* Next routine may update nss based on dot11Mode */
 	lim_ft_prepare_add_bss_req(mac_ctx, ft_session_ptr, bss_desc);
 	if (session_ptr->is11Rconnection)

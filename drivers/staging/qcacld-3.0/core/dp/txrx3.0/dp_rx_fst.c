@@ -63,6 +63,24 @@ void dp_rx_dump_fisa_table(struct dp_soc *soc)
 	}
 }
 
+void dp_print_fisa_stats(struct dp_soc *soc)
+{
+	struct wlan_cfg_dp_soc_ctxt *cfg = soc->wlan_cfg_ctx;
+	struct dp_rx_fst *fst = soc->rx_fst;
+
+	/* Check if it is enabled in the INI */
+	if (!wlan_cfg_is_rx_fisa_enabled(cfg))
+		return;
+
+	dp_info("invalid flow index: %u", fst->stats.invalid_flow_index);
+	dp_info("reo_mismatch: cce_match: %u",
+		fst->stats.reo_mismatch.allow_cce_match);
+	dp_info("reo_mismatch: allow_fse_metdata_mismatch: %u",
+		fst->stats.reo_mismatch.allow_fse_metdata_mismatch);
+	dp_info("reo_mismatch: allow_non_aggr: %u",
+		fst->stats.reo_mismatch.allow_non_aggr);
+}
+
 /**
  * dp_rx_flow_send_htt_operation_cmd() - Invalidate FSE cache on FT change
  * @pdev: handle to DP pdev

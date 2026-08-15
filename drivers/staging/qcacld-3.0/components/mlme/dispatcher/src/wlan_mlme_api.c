@@ -3793,14 +3793,16 @@ char *mlme_get_roam_status_str(uint32_t roam_status)
 char *mlme_get_roam_scan_type_str(uint32_t roam_scan_type)
 {
 	switch (roam_scan_type) {
-	case 0:
+	case ROAM_STATS_SCAN_TYPE_PARTIAL:
 		return "PARTIAL";
-	case 1:
+	case ROAM_STATS_SCAN_TYPE_FULL:
 		return "FULL";
-	case 2:
+	case ROAM_STATS_SCAN_TYPE_NO_SCAN:
 		return "NO SCAN";
-	case 3:
-		return "Higher Band";
+	case ROAM_STATS_SCAN_TYPE_HIGHER_BAND_5GHZ_6GHZ:
+		return "Higher Band: 5 GHz + 6 GHz";
+	case ROAM_STATS_SCAN_TYPE_HIGHER_BAND_6GHZ:
+		return "Higher Band : 6 GHz";
 	default:
 		return "UNKNOWN";
 	}

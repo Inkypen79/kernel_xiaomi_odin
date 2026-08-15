@@ -2444,11 +2444,30 @@ wlan_mlme_get_ignore_fw_reg_offload_ind(struct wlan_objmgr_psoc *psoc,
 char *mlme_get_roam_trigger_str(uint32_t roam_scan_trigger);
 
 /**
- * mlme_get_roam_scan_type_str() - Get the string for roam sacn type
+ * enum roam_stats_scan_type  - Roam scan type defines
+ * @ROAM_STATS_SCAN_TYPE_PARTIAL: Partial scan
+ * @ROAM_STATS_SCAN_TYPE_FULL: Full scan
+ * @ROAM_STATS_SCAN_TYPE_NO_SCAN: No roam scan was triggered. This is generally
+ * used in BTM events to indicate BTM frame exchange logs.
+ * @ROAM_STATS_SCAN_TYPE_HIGHER_BAND_5GHZ_6GHZ: Higher band roam scan from 2 GHz
+ * to 5 GHz or 6 GHz
+ * @ROAM_STATS_SCAN_TYPE_HIGHER_BAND_6GHZ: Higher band roam scan from 5 GHz to
+ * 6 GHz
+ */
+enum roam_stats_scan_type {
+	ROAM_STATS_SCAN_TYPE_PARTIAL = 0,
+	ROAM_STATS_SCAN_TYPE_FULL = 1,
+	ROAM_STATS_SCAN_TYPE_NO_SCAN = 2,
+	ROAM_STATS_SCAN_TYPE_HIGHER_BAND_5GHZ_6GHZ = 3,
+	ROAM_STATS_SCAN_TYPE_HIGHER_BAND_6GHZ = 4,
+};
+
+/**
+ * mlme_get_roam_scan_type_str() - Get the string for roam scan type
  * @roam_scan_type: roam scan type coming from fw via
  * wmi_roam_scan_info tlv
  *
- *  Return: Meaningful string for roam sacn type
+ *  Return: Meaningful string for roam scan type
  */
 char *mlme_get_roam_scan_type_str(uint32_t roam_scan_type);
 

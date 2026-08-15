@@ -319,12 +319,12 @@ static int32_t cam_sensor_get_io_buffer(
 			 (uint8_t *)buf_addr + io_cfg->offsets[0];
 		i2c_settings->read_buff_len =
 			buf_size - io_cfg->offsets[0];
+		cam_mem_put_cpu_buf(io_cfg->mem_handle[0]);
 	} else {
 		CAM_ERR(CAM_SENSOR, "Invalid direction: %d",
 			io_cfg->direction);
 		rc = -EINVAL;
 	}
-	cam_mem_put_cpu_buf(io_cfg->mem_handle[0]);
 	return rc;
 }
 

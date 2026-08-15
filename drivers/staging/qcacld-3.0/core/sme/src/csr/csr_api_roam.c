@@ -21461,12 +21461,15 @@ csr_process_roam_sync_callback(struct mac_context *mac_ctx,
 			mac_ctx->psoc);
 		mac_ctx->sme.set_connection_info_cb(false);
 
-		if (roam_synch_data->pmk_len)
+		if (roam_synch_data->pmk_len) {
+			mlme_debug("Received pmk in roam sync. Length: %d",
+				   roam_synch_data->pmk_len);
 			csr_check_and_set_sae_single_pmk_cap(
 						mac_ctx, session,
 						session_id,
 						roam_synch_data->pmk,
 						roam_synch_data->pmk_len);
+		}
 
 		if (ucfg_pkt_capture_get_pktcap_mode(mac_ctx->psoc))
 			ucfg_pkt_capture_record_channel(vdev);

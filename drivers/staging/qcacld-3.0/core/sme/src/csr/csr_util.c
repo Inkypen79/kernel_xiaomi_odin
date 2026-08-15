@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2011-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -2451,17 +2451,26 @@ static void csr_update_key_mgmt_crypto_param(struct wlan_objmgr_vdev *vdev,
 {
 	int32_t key_mgmt = 0;
 	int32_t neg_akm;
+	int32_t ap_akm = 0;
 	uint8_t i;
 
-	neg_akm = wlan_crypto_get_param(vdev, WLAN_CRYPTO_PARAM_KEY_MGMT);
+	neg_akm = wlan_crypto_get_param(vdev, WLAN_CRYPTO_PARAM_ORIG_KEY_MGMT);
 	if (neg_akm < 0) {
 		sme_err("Invalid AKM suite");
 		return;
 	}
 
 	for (i = 0; i < ap_rsn.akm_suite_cnt; i++)
-		SET_PARAM(neg_akm,
+		SET_PARAM(ap_akm,
 			  wlan_crypto_rsn_suite_to_keymgmt(ap_rsn.akm_suite[i]));
+
+	/* Intersect crypto AKM and candidate AP's AKM */
+	neg_akm &= ap_akm;
+	if (neg_akm <= 0) {
+		sme_err("Invalid AKM suite");
+		return;
+	}
+	sme_debug("Intersected AKM with AP's AKM 0x%x", neg_akm);
 
 	/*
 	 * As there can be multiple AKM present select the most secured AKM
@@ -2531,6 +2540,7 @@ static void csr_update_ucast_cipher_crypto_param(struct wlan_objmgr_vdev *vdev,
 {
 	int32_t ucastcipherset = 0;
 	int32_t neg_ucastcipher;
+	int32_t ap_ucastcipher = 0;
 	uint8_t i;
 
 	neg_ucastcipher = wlan_crypto_get_param(vdev,
@@ -2541,8 +2551,15 @@ static void csr_update_ucast_cipher_crypto_param(struct wlan_objmgr_vdev *vdev,
 	}
 
 	for (i = 0; i < ap_rsn.pwise_cipher_suite_count; i++)
-		SET_PARAM(neg_ucastcipher,
+		SET_PARAM(ap_ucastcipher,
 			  wlan_crypto_rsn_suite_to_cipher(ap_rsn.pwise_cipher_suites[i]));
+
+	/* Intersect crypto cipherset and candidate AP's cipherset */
+	neg_ucastcipher &= ap_ucastcipher;
+	if (neg_ucastcipher <= 0) {
+		sme_err("Invalid unicast cipherset");
+		return;
+	}
 
 	/*
 	 * As there can be multiple ucastcipher present select the most secured
@@ -2587,8 +2604,6 @@ uint8_t csr_construct_rsn_ie(struct mac_context *mac, uint32_t sessionId,
 	     (mac, pSirBssDesc, &local_ap_ie))))
 		return ie_len;
 
-	/* get AP RSN cap */
-	qdf_mem_copy(&rsn_cap, local_ap_ie->RSN.RSN_Cap, sizeof(rsn_cap));
 	if (!ap_ie && local_ap_ie)
 		/* locally allocated */
 		qdf_mem_free(local_ap_ie);
@@ -2608,6 +2623,8 @@ uint8_t csr_construct_rsn_ie(struct mac_context *mac, uint32_t sessionId,
 	}
 	self_rsn_cap = (uint16_t)rsn_val;
 
+	/* get AP RSN cap */
+	rsn_cap = pSirBssDesc->neg_rsn_caps;
 	/* If AP is capable then use self capability else set PMF as 0 */
 	if (rsn_cap & WLAN_CRYPTO_RSN_CAP_MFP_ENABLED &&
 	    pProfile->MFPCapable) {

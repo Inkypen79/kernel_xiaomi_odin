@@ -1677,15 +1677,33 @@ static int dp_add_nbuf_to_fisa_flow(struct dp_rx_fst *fisa_hdl,
 		fse_metadata =
 			hal_rx_msdu_fse_metadata_get(hal_soc_hdl, rx_tlv_hdr);
 		cce_match = hal_rx_msdu_cce_match_get(rx_tlv_hdr);
-		if (cce_match || (fisa_hdl->del_flow_count &&
-		    fse_metadata != fisa_flow->metadata)) {
+		/*
+		 * For two cases the fse_metadata will not match the metadata
+		 * from the fisa_flow_table entry
+		 * 1) Flow has been evicted (lru deletion), and this packet is
+		 * one of the few packets pending in the rx ring from the prev
+		 * flow
+		 * 2) HW flow table match fails for some packets in the
+		 * currently active flow.
+		 */
+		if (cce_match) {
 			dp_rx_fisa_release_ft_lock(fisa_hdl, napi_id);
+			DP_STATS_INC(fisa_hdl, reo_mismatch.allow_cce_match,
+				     1);
+			return FISA_AGGR_NOT_ELIGIBLE;
+		}
+
+		if (fse_metadata != fisa_flow->metadata) {
+			dp_rx_fisa_release_ft_lock(fisa_hdl, napi_id);
+			DP_STATS_INC(fisa_hdl,
+				     reo_mismatch.allow_fse_metdata_mismatch,
+				     1);
 			return FISA_AGGR_NOT_ELIGIBLE;
 		}
 
 		dp_err("REO id mismatch flow: %pK napi_id: %u nbuf: %pK reo_id: %u",
 		       fisa_flow, fisa_flow->napi_id, nbuf, napi_id);
-		DP_STATS_INC(fisa_hdl, reo_mismatch, 1);
+		DP_STATS_INC(fisa_hdl, reo_mismatch.allow_non_aggr, 1);
 		QDF_BUG(0);
 		dp_rx_fisa_release_ft_lock(fisa_hdl, napi_id);
 		return FISA_AGGR_NOT_ELIGIBLE;

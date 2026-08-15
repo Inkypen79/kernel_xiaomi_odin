@@ -1361,6 +1361,15 @@ wma_fill_rx_stats(struct sir_wifi_ll_ext_stats *ll_stats,
 			 wmi_peer_rx, wmi_rx, peer_stats);
 		return QDF_STATUS_E_FAILURE;
 	}
+
+	/* Check if num_rx_stats is sufficient to avoid buffer overflow */
+	if (param_buf->num_rx_stats <
+	    fix_param->num_peer_ac_rx_stats * WLAN_MAX_AC) {
+		wma_err("Insufficient rx_stats buffer: available %d, required %d",
+			param_buf->num_rx_stats,
+			fix_param->num_peer_ac_rx_stats * WLAN_MAX_AC);
+		return QDF_STATUS_E_FAILURE;
+	}
 	for (i = 0; i < fix_param->num_peer_ac_rx_stats; i++) {
 		uint32_t peer_id = wmi_peer_rx[i].peer_id;
 		struct sir_wifi_rx *ac;
@@ -3813,6 +3822,30 @@ void wma_release_wakelock(qdf_wake_lock_t *wl)
 
 	qdf_wake_lock_release(wl, WIFI_POWER_EVENT_WAKELOCK_WMI_CMD_RSP);
 	qdf_runtime_pm_allow_suspend(&wma->wmi_cmd_rsp_runtime_lock);
+}
+
+void wma_prevent_pm_during_roam_sync(t_wma_handle *wma)
+{
+	if (!wma)
+		return;
+
+	if (wma->is_roam_lock_acquired)
+		return;
+
+	qdf_runtime_pm_prevent_suspend(&wma->roam_sync_runtime_lock);
+	wma->is_roam_lock_acquired = true;
+}
+
+void wma_allow_pm_after_roam_sync(t_wma_handle *wma)
+{
+	if (!wma)
+		return;
+
+	if (!wma->is_roam_lock_acquired)
+		return;
+
+	qdf_runtime_pm_allow_suspend(&wma->roam_sync_runtime_lock);
+	wma->is_roam_lock_acquired = false;
 }
 
 QDF_STATUS wma_send_vdev_stop_to_fw(t_wma_handle *wma, uint8_t vdev_id)

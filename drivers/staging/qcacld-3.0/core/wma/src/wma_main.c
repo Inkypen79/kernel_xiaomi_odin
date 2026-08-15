@@ -3428,6 +3428,8 @@ QDF_STATUS wma_open(struct wlan_objmgr_psoc *psoc,
 					"wlan_fw_rsp_wakelock");
 	qdf_runtime_lock_init(&wma_handle->wmi_cmd_rsp_runtime_lock);
 	qdf_runtime_lock_init(&wma_handle->sap_prevent_runtime_pm_lock);
+	qdf_runtime_lock_init(&wma_handle->roam_sync_runtime_lock);
+	wma_handle->is_roam_lock_acquired = false;
 
 	/* Register peer assoc conf event handler */
 	wmi_unified_register_event_handler(wma_handle->wmi_handle,
@@ -3538,6 +3540,7 @@ err_dbglog_init:
 	qdf_runtime_lock_deinit(&wma_handle->sap_prevent_runtime_pm_lock);
 	qdf_runtime_lock_deinit(&wma_handle->wmi_cmd_rsp_runtime_lock);
 	qdf_spinlock_destroy(&wma_handle->wma_hold_req_q_lock);
+	qdf_runtime_lock_deinit(&wma_handle->roam_sync_runtime_lock);
 err_event_init:
 	wmi_unified_unregister_event_handler(wma_handle->wmi_handle,
 					     wmi_debug_print_event_id);
@@ -4592,6 +4595,7 @@ QDF_STATUS wma_close(void)
 	qdf_wake_lock_destroy(&wma_handle->wmi_cmd_rsp_wake_lock);
 	qdf_runtime_lock_deinit(&wma_handle->sap_prevent_runtime_pm_lock);
 	qdf_runtime_lock_deinit(&wma_handle->wmi_cmd_rsp_runtime_lock);
+	qdf_runtime_lock_deinit(&wma_handle->roam_sync_runtime_lock);
 	qdf_spinlock_destroy(&wma_handle->wma_hold_req_q_lock);
 
 	if (wma_handle->pGetRssiReq) {

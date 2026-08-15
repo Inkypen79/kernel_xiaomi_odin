@@ -198,6 +198,7 @@ typedef enum {
   WLAN_MODULE_OPT_DATA,                 /* 0x9a */
   WLAN_MODULE_ASD,                      /* 0x9b */
   WLAN_MODULE_ENERGY_MGMT,              /* 0x9c */
+  WLAN_MODULE_SMD,                      /* 0x9d */
 
   WLAN_MODULE_ID_MAX,
   WLAN_MODULE_ID_INVALID = WLAN_MODULE_ID_MAX,

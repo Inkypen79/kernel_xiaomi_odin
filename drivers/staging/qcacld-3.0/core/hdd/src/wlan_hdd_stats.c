@@ -3917,7 +3917,8 @@ hdd_get_roam_rt_stats_event_len(struct mlme_roam_debug_info *roam_stats)
 		len += nla_total_size(sizeof(uint8_t));
 
 	if (roam_stats->scan.present) {
-		if (roam_stats->scan.num_chan && !roam_stats->scan.type)
+		if (roam_stats->scan.num_chan &&
+		    roam_stats->scan.type == ROAM_STATS_SCAN_TYPE_PARTIAL)
 			for (i = 0; i < roam_stats->scan.num_chan;)
 				i++;
 
@@ -3990,7 +3991,8 @@ roam_rt_stats_fill_scan_freq(struct sk_buff *vendor_event,
 		kfree_skb(vendor_event);
 		return;
 	}
-	if (roam_stats->scan.num_chan && !roam_stats->scan.type) {
+	if (roam_stats->scan.num_chan &&
+	    roam_stats->scan.type == ROAM_STATS_SCAN_TYPE_PARTIAL) {
 		for (i = 0; i < roam_stats->scan.num_chan; i++) {
 			if (nla_put_u32(vendor_event, i,
 					roam_stats->scan.chan_freq[i])) {

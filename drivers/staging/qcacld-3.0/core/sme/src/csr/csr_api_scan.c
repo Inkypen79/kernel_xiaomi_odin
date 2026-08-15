@@ -2256,6 +2256,7 @@ static QDF_STATUS csr_fill_bss_from_scan_entry(struct mac_context *mac_ctx,
 
 	bss_desc->beaconInterval = scan_entry->bcn_int;
 	bss_desc->capabilityInfo = scan_entry->cap_info.value;
+	bss_desc->neg_rsn_caps = scan_entry->neg_sec_info.rsn_caps;
 
 	if (WLAN_REG_IS_5GHZ_CH_FREQ(scan_entry->channel.chan_freq) ||
 	    WLAN_REG_IS_6GHZ_CHAN_FREQ(scan_entry->channel.chan_freq))

@@ -5244,6 +5244,7 @@ int wlan_hdd_cfg80211_start_bss(struct hdd_adapter *adapter,
 	bool deliver_start_evt = true;
 	struct s_ext_cap *p_ext_cap;
 	enum reg_phymode reg_phy_mode, updated_phy_mode;
+	bool dfs_master_capable;
 
 	hdd_enter();
 
@@ -5785,6 +5786,24 @@ int wlan_hdd_cfg80211_start_bss(struct hdd_adapter *adapter,
 			config->ch_width_orig = CH_WIDTH_40MHZ;
 		else
 			config->ch_width_orig = CH_WIDTH_20MHZ;
+	}
+
+	status = ucfg_mlme_get_dfs_master_capability(hdd_ctx->psoc,
+						     &dfs_master_capable);
+	if (QDF_IS_STATUS_ERROR(status)) {
+		hdd_err("Failed to get dfs master capable");
+		ret = -EINVAL;
+		goto error;
+	}
+
+	if (!dfs_master_capable &&
+	    policy_mgr_is_bonded_chan_dfs(hdd_ctx->psoc,
+					  config->ch_width_orig,
+					  config->ch_params.mhz_freq_seg1,
+					  config->chan_freq)) {
+		hdd_err("Failed to bringup SAP; Atleast one bonded channel is DFS");
+		ret = -EINVAL;
+		goto error;
 	}
 
 	if (wlan_hdd_setup_driver_overrides(adapter)) {

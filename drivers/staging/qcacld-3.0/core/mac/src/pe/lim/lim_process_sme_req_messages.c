@@ -1604,6 +1604,14 @@ __lim_process_sme_join_req(struct mac_context *mac_ctx, void *msg_buf)
 		session->connected_akm = sme_join_req->akm;
 		session->is_adaptive_11r_connection =
 				sme_join_req->is_adaptive_11r_connection;
+		/* Reset the SPMK global cache for non-SAE connection */
+		if (session->connected_akm != ANI_AKM_TYPE_SAE) {
+			wlan_mlme_set_sae_single_pmk_bss_cap(mac_ctx->psoc,
+							     session->vdev_id,
+							     false);
+			wlan_mlme_clear_sae_single_pmk_info(session->vdev,
+							    NULL);
+		}
 #ifdef FEATURE_WLAN_ESE
 		session->isESEconnection = sme_join_req->isESEconnection;
 #endif
@@ -1832,7 +1840,7 @@ __lim_process_sme_join_req(struct mac_context *mac_ctx, void *msg_buf)
 			session->spectrumMgtEnabled = true;
 
 		session->isOSENConnection = sme_join_req->isOSENConnection;
-		pe_debug("Freq %d width %d freq0 %d freq1 %d, Smps %d: mode %d action %d, nss 1x1 %d vdev_nss %d nss %d cbMode %d dot11mode %d subfer %d subfee %d csn %d is_cisco %d",
+		pe_debug("Freq %d width %d freq0 %d freq1 %d, Smps %d: mode %d action %d, nss 1x1 %d vdev_nss %d nss %d cbMode %d dot11mode %d subfer %d subfee %d csn %d is_cisco %d akm %d",
 			 session->curr_op_freq, session->ch_width,
 			 session->ch_center_freq_seg0,
 			 session->ch_center_freq_seg1,
@@ -1843,7 +1851,7 @@ __lim_process_sme_join_req(struct mac_context *mac_ctx, void *msg_buf)
 			 session->vht_config.su_beam_former,
 			 session->vht_config.su_beam_formee,
 			 session->vht_config.csnof_beamformer_antSup,
-			 session->isCiscoVendorAP);
+			 session->isCiscoVendorAP, session->connected_akm);
 
 		/* Issue LIM_MLM_JOIN_REQ to MLM */
 		status = lim_send_join_req(session, mlm_join_req);

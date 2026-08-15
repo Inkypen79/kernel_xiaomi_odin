@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
  */
 
@@ -1248,7 +1248,6 @@ static int dp_display_host_ready(struct dp_display_private *dp)
 	dp->ctrl->abort(dp->ctrl, false);
 
 	dp->aux->init(dp->aux, dp->parser->aux_cfg, skip_op);
-	dp->panel->init(dp->panel, skip_op);
 
 	dp_display_state_add(DP_STATE_READY);
 	/* log this as it results from user action of cable connection */

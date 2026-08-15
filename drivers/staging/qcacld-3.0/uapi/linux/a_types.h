@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2013-2014 The Linux Foundation. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -29,15 +30,21 @@
 #define _A_TYPES_H_
 #include <athdefs.h>
 
-typedef unsigned int A_UINT32;
 typedef unsigned long long A_UINT64;
+typedef          long long A_INT64;
+
+typedef unsigned int A_UINT32;
+typedef          int A_INT32;
+
 typedef unsigned short A_UINT16;
+typedef          short A_INT16;
+
 typedef unsigned char A_UINT8;
-typedef int A_INT32;
-typedef short A_INT16;
-typedef char A_INT8;
+typedef          char A_INT8;
+
 typedef unsigned char A_UCHAR;
-typedef char A_CHAR;
+typedef          char A_CHAR;
+
 typedef _Bool A_BOOL;
 
 #endif /* _ATHTYPES_H_ */

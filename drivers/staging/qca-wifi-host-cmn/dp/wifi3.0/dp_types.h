@@ -3134,10 +3134,23 @@ struct dp_rx_fst {
 #define DP_RX_GET_SW_FT_ENTRY_SIZE sizeof(struct dp_rx_fse)
 #elif WLAN_SUPPORT_RX_FISA
 
+/**
+ * struct dp_fisa_reo_mismatch_stats - reo mismatch sub-case stats for FISA
+ * @allow_cce_match: packet allowed due to cce mismatch
+ * @allow_fse_metdata_mismatch: packet allowed since it belongs to same flow,
+ *			only fse_metadata is not same.
+ * @allow_non_aggr: packet allowed due to any other reason.
+ */
+struct dp_fisa_reo_mismatch_stats {
+	uint32_t allow_cce_match;
+	uint32_t allow_fse_metdata_mismatch;
+	uint32_t allow_non_aggr;
+};
+
 struct dp_fisa_stats {
 	/* flow index invalid from RX HW TLV */
 	uint32_t invalid_flow_index;
-	uint32_t reo_mismatch;
+	struct dp_fisa_reo_mismatch_stats reo_mismatch;
 	 uint32_t incorrect_rdi;
 };
 

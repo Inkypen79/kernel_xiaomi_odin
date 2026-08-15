@@ -10101,6 +10101,7 @@ static QDF_STATUS dp_txrx_dump_stats(struct cdp_soc_t *psoc, uint16_t value,
 		dp_txrx_path_stats(soc);
 		dp_print_soc_interrupt_stats(soc);
 		hal_dump_reg_write_stats(soc->hal_soc);
+		dp_print_fisa_stats(soc);
 		break;
 
 	case CDP_RX_RING_STATS:
