@@ -104,6 +104,8 @@ struct cam_ois_intf_params {
  * @device_name     :   Device name
  * @i2c_pre_init_data:  ois i2c pre init settings
  * @is_ois_pre_init :   flag for pre init settings
+ * @i2c_post_init_data: ois i2c post init settings
+ * @is_ois_post_init:   flag for post init settings
  *
  */
 struct cam_ois_ctrl_t {
@@ -128,6 +130,8 @@ struct cam_ois_ctrl_t {
 	struct cam_ois_opcode opcode;
 	struct i2c_settings_array i2c_pre_init_data; //xiaomi add
 	uint8_t is_ois_pre_init; //xiaomi add
+	struct i2c_settings_array i2c_post_init_data; //xiaomi add
+	uint8_t is_ois_post_init; //xiaomi add
 };
 
 /**
