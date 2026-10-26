@@ -242,6 +242,7 @@ static int exfat_search_empty_slot(struct super_block *sb,
 	int i, dentry, num_empty = 0;
 	int dentries_per_clu;
 	unsigned int type;
+	unsigned int clu_count = 0;
 	struct exfat_chain clu;
 	struct exfat_dentry *ep;
 	struct exfat_sb_info *sbi = EXFAT_SB(sb);
@@ -324,6 +325,12 @@ static int exfat_search_empty_slot(struct super_block *sb,
 		} else {
 			if (exfat_get_next_cluster(sb, &clu.dir))
 				return -EIO;
+
+			/* the cluster chain includes a loop */
+			if (unlikely(++clu_count > EXFAT_DATA_CLUSTER_COUNT(sbi))) {
+				exfat_fs_error(sb, "The cluster chain has a loop");
+				return -EIO;
+			}
 		}
 	}
 
@@ -404,6 +411,7 @@ static int exfat_find_empty_entry(struct inode *inode,
 		if (ei->start_clu == EXFAT_EOF_CLUSTER) {
 			ei->start_clu = clu.dir;
 			p_dir->dir = clu.dir;
+			hint_femp.eidx = 0;
 		}
 
 		/* append to the FAT chain */
@@ -684,6 +692,7 @@ static int exfat_find(struct inode *dir, struct qstr *qname,
 		struct exfat_dir_entry *info)
 {
 	int ret, dentry, count;
+	unsigned int max_clu;
 	struct exfat_chain cdir;
 	struct exfat_uni_name uni_name;
 	struct super_block *sb = dir->i_sb;
@@ -740,14 +749,19 @@ static int exfat_find(struct inode *dir, struct qstr *qname,
 	info->type = exfat_get_entry_type(ep);
 	info->attr = le16_to_cpu(ep->dentry.file.attr);
 	info->size = le64_to_cpu(ep2->dentry.stream.valid_size);
+
+	info->start_clu = le32_to_cpu(ep2->dentry.stream.start_clu);
+	if (!is_valid_cluster(sbi, info->start_clu) && info->size) {
+		exfat_warn(sb, "start_clu is invalid cluster(0x%x)",
+				info->start_clu);
+		info->size = 0;
+	}
+
 	if (info->size == 0) {
 		info->flags = ALLOC_NO_FAT_CHAIN;
 		info->start_clu = EXFAT_EOF_CLUSTER;
-	} else {
+	} else
 		info->flags = ep2->dentry.stream.flags;
-		info->start_clu =
-			le32_to_cpu(ep2->dentry.stream.start_clu);
-	}
 
 	exfat_get_entry_time(sbi, &info->crtime,
 			     ep->dentry.file.create_tz,
@@ -765,6 +779,27 @@ static int exfat_find(struct inode *dir, struct qstr *qname,
 			     ep->dentry.file.access_date,
 			     0);
 	exfat_put_dentry_set(&es, false);
+
+	/*
+	 * info->size comes from the on-disk valid_size; reject negative values
+	 * explicitly, since they would also pass the cluster count check below.
+	 */
+	if (info->size < 0) {
+		exfat_fs_error(sb, "data valid size is invalid(%lld)", info->size);
+		return -EIO;
+	}
+
+	/*
+	 * used_clusters is counted from the allocation bitmap. If the bitmap
+	 * was found untrustworthy at mount (read-only fallback), bound the
+	 * size by the volume instead so the data stays readable.
+	 */
+	max_clu = sbi->ro_fallback ? EXFAT_DATA_CLUSTER_COUNT(sbi) :
+				     sbi->used_clusters;
+	if (unlikely(EXFAT_B_TO_CLU_ROUND_UP(info->size, sbi) > max_clu)) {
+		exfat_fs_error(sb, "data size is invalid(%lld)", info->size);
+		return -EIO;
+	}
 
 	if (ei->start_clu == EXFAT_FREE_CLUSTER) {
 		exfat_fs_error(sb,
@@ -1060,6 +1095,7 @@ static int exfat_check_dir_empty(struct super_block *sb,
 {
 	int i, dentries_per_clu;
 	unsigned int type;
+	unsigned int clu_count = 0;
 	struct exfat_chain clu;
 	struct exfat_dentry *ep;
 	struct exfat_sb_info *sbi = EXFAT_SB(sb);
@@ -1096,6 +1132,10 @@ static int exfat_check_dir_empty(struct super_block *sb,
 		} else {
 			if (exfat_get_next_cluster(sb, &(clu.dir)))
 				return -EIO;
+
+			/* break if the cluster chain includes a loop */
+			if (unlikely(++clu_count > EXFAT_DATA_CLUSTER_COUNT(sbi)))
+				break;
 		}
 	}
 
@@ -1226,25 +1266,33 @@ static int exfat_rename_file(struct inode *inode, struct exfat_chain *p_dir,
 		return -EIO;
 
 	num_old_entries = exfat_count_ext_entries(sb, p_dir, oldentry, epold);
-	if (num_old_entries < 0)
+	if (num_old_entries < 0) {
+		brelse(old_bh);
 		return -EIO;
+	}
 	num_old_entries++;
 
 	num_new_entries = exfat_calc_num_entries(p_uniname);
-	if (num_new_entries < 0)
+	if (num_new_entries < 0) {
+		brelse(old_bh);
 		return num_new_entries;
+	}
 
 	if (num_old_entries < num_new_entries) {
 		int newentry;
 
 		newentry =
 			exfat_find_empty_entry(inode, p_dir, num_new_entries);
-		if (newentry < 0)
+		if (newentry < 0) {
+			brelse(old_bh);
 			return newentry; /* -EIO or -ENOSPC */
+		}
 
 		epnew = exfat_get_dentry(sb, p_dir, newentry, &new_bh);
-		if (!epnew)
+		if (!epnew) {
+			brelse(old_bh);
 			return -EIO;
+		}
 
 		*epnew = *epold;
 		if (exfat_get_entry_type(epnew) == TYPE_FILE) {

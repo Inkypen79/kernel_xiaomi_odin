@@ -165,6 +165,11 @@ static void fuse_lookup_init(struct fuse_conn *fc, struct fuse_args *args,
 	args->in_numargs = 1;
 	args->in_args[0].size = name->len + 1;
 	args->in_args[0].value = name->name;
+	/*
+	 * The optional trailing fuse_entry_bpf_out is accepted even without
+	 * CONFIG_FUSE_BPF, so a daemon that sends it still works; callers then
+	 * treat the positive (trailing arg size) return as plain success.
+	 */
 	args->out_argvar = true;
 	args->out_numargs = 2;
 	args->out_args[0].size = sizeof(struct fuse_entry_out);
@@ -291,6 +296,11 @@ static int fuse_dentry_revalidate(struct dentry *entry, unsigned int flags)
 		ret = fuse_simple_request(fm, &args);
 		dput(parent);
 
+#ifndef CONFIG_FUSE_BPF
+		/* Trailing fuse_entry_bpf_out is discarded without fuse-bpf */
+		if (ret > 0)
+			ret = 0;
+#endif
 		/* Zero nodeid is same as -ENOENT */
 		if (!ret && !outarg.nodeid)
 			ret = -ENOENT;
@@ -605,6 +615,13 @@ int fuse_lookup_name(struct super_block *sb, u64 nodeid, const struct qstr *name
 	} else
 #endif
 	{
+		/*
+		 * A positive value is the size of a trailing fuse_entry_bpf_out
+		 * that is not acted on here: treat it as plain success so it is
+		 * never returned (and turned into an ERR_PTR "dentry") by callers.
+		 */
+		if (err > 0)
+			err = 0;
 		/* Zero nodeid is same as -ENOENT, but with valid timeout */
 		if (err || !outarg->nodeid)
 			goto out_put_forget;
