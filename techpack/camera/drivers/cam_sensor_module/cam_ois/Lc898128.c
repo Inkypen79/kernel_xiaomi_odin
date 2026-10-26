@@ -106,15 +106,20 @@ void IORead32A(struct cam_ois_ctrl_t *o_ctrl, uint32_t addr, uint32_t* data)
 
 void CntWrt(struct cam_ois_ctrl_t *o_ctrl, uint8_t *data, uint32_t length, uint32_t delay)
 {
-	static struct cam_sensor_i2c_reg_array w_data[256] = { {0} };
+	struct cam_sensor_i2c_reg_array *w_data;
 	struct cam_sensor_i2c_reg_setting write_setting;
 	uint32_t i = 0;
 	uint32_t addr = 0;
 	int32_t rc = 0;
-	if (!data || !o_ctrl || (length < 3)) {
+	if (!data || !o_ctrl || (length < 3) || ((length - 2) > 256)) {
 		CAM_ERR(CAM_OIS, "Invalid Args");
 		return;
 	}
+
+	/* per-call buffer: several OIS instances may write concurrently */
+	w_data = kcalloc(length - 2, sizeof(*w_data), GFP_KERNEL);
+	if (!w_data)
+		return;
 
 	addr = (((uint16_t)(data[0]) << 8) | data[1]) & 0xFFFF;
 	for (i = 0;i < (length -2) && i < 256; i++) {
@@ -137,6 +142,7 @@ void CntWrt(struct cam_ois_ctrl_t *o_ctrl, uint8_t *data, uint32_t length, uint3
 	for (i = 0; i < (length -2) && i < 256; i+=4) {
 		CAM_DBG(CAM_OIS, "[OISDEBUG] write addr 0x%04x = 0x%02x 0x%02x 0x%02x 0x%02x", addr, data[i+2], data[i+3], data[i+4], data[i+5]);
 	}
+	kfree(w_data);
 }
 
 void CntRd(struct cam_ois_ctrl_t *o_ctrl, uint32_t addr, uint8_t *data, uint32_t length)
@@ -964,6 +970,7 @@ uint8_t ProgramFlash128_Standard(struct cam_ois_ctrl_t *o_ctrl)
 	const uint8_t *NcFromVal = NULL;//ptr->FromCode + 64;
 	const uint8_t *NcFromVal1st = NULL;//ptr->FromCode;
 	uint8_t UcOddEvn;
+	uint8_t ans = 0;
 
 	snprintf(fw_name, 32, "%s.mem", o_ctrl->ois_name);
 
@@ -977,6 +984,11 @@ uint8_t ProgramFlash128_Standard(struct cam_ois_ctrl_t *o_ctrl)
 		NcFromVal = (uint8_t *)fw->data + BURST_LENGTH_FC;
 		NcFromVal1st = (uint8_t *)fw->data;
 		total_bytes = fw->size;
+		if (fw->size < BURST_LENGTH_FC) {
+			CAM_ERR(CAM_OIS, "%s too small: %zu", fw_name, fw->size);
+			ans = 0x40;
+			goto out;
+		}
 
 		IOWrite32A(o_ctrl, 0xE0701C , 0x00000000, 0);
 		RamWrite32A(o_ctrl, 0xF007, 0x00000000, 0);	// FlashAccess Setup
@@ -1023,7 +1035,8 @@ uint8_t ProgramFlash128_Standard(struct cam_ois_ctrl_t *o_ctrl)
 					RamRead32A(o_ctrl, 0xF00C, &UlReadVal);
 					if( UlCnt++ > 250 ) {
 						IOWrite32A(o_ctrl, 0xE0701C, 0x00000002, 0);
-						return (0x41);	// write ng
+						ans = 0x41;
+						goto out;	// write ng
 					}
 				} while (UlReadVal != 0);
 			 	RamWrite32A(o_ctrl, 0xF00C, 0x00000004, 0);	// FromCmd.Control
@@ -1032,7 +1045,8 @@ uint8_t ProgramFlash128_Standard(struct cam_ois_ctrl_t *o_ctrl)
 					RamRead32A(o_ctrl, 0xF00C, &UlReadVal);	// FromCmd.Control
 					if ( UlCnt++ > 250 ) {
 						IOWrite32A(o_ctrl, 0xE0701C , 0x00000002, 0);
-						return (0x41);	// write ng
+						ans = 0x41;
+						goto out;	// write ng
 					}
 				} while (UlReadVal != 0);
 				RamWrite32A(o_ctrl, 0xF00C, 0x00000008, 0);	// FromCmd.Control
@@ -1045,7 +1059,8 @@ uint8_t ProgramFlash128_Standard(struct cam_ois_ctrl_t *o_ctrl)
 			RamRead32A(o_ctrl, 0xF00C, &UlReadVal);	// FromCmd.Control
 			if( UlCnt++ > 250 ) {
 				IOWrite32A(o_ctrl, 0xE0701C , 0x00000002, 0);
-				return (0x41);	// write ng
+				ans = 0x41;
+				goto out;	// write ng
 			}
 		} while ( (UlReadVal & 0x0000000C) != 0 );
 
@@ -1084,7 +1099,8 @@ uint8_t ProgramFlash128_Standard(struct cam_ois_ctrl_t *o_ctrl)
 				RamRead32A(o_ctrl, 0xF00C, &UlReadVal);	// FromCmd.Control
 				if( UlCnt++ > 250 ) {
 					IOWrite32A(o_ctrl, 0xE0701C , 0x00000002, 0);
-					return (0x41);	// write ng
+					ans = 0x41;
+					goto out;	// write ng
 				}
 			} while ( UlReadVal != 0 );
 		 	RamWrite32A(o_ctrl, 0xF00C, 0x00000004, 0);	// FromCmd.Control
@@ -1097,13 +1113,16 @@ uint8_t ProgramFlash128_Standard(struct cam_ois_ctrl_t *o_ctrl)
 			RamRead32A(o_ctrl, 0xF00C, &UlReadVal);	// FromCmd.Control
 			if( UlCnt++ > 250 ) {
 				IOWrite32A(o_ctrl, 0xE0701C, 0x00000002, 0);
-				return (0x41);	// write ng
+				ans = 0x41;
+				goto out;	// write ng
 			}
 		} while ( (UlReadVal & 0x0000000C) != 0 );
 
 		IOWrite32A(o_ctrl, 0xE0701C , 0x00000002, 0);
 	}
-	return( 0 );
+out:
+	release_firmware(fw);
+	return ans;
 }
 #endif
 

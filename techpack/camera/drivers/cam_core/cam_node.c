@@ -205,6 +205,12 @@ static int __cam_node_handle_acquire_hw_v2(struct cam_node *node,
 		return -EINVAL;
 	}
 
+	if (strcmp(node->name, ctx->dev_name)) {
+		CAM_ERR(CAM_CORE, "node name %s dev name:%s not matching",
+			node->name, ctx->dev_name);
+		return -EINVAL;
+	}
+
 	rc = cam_context_handle_acquire_hw(ctx, acquire);
 	if (rc) {
 		CAM_ERR(CAM_CORE, "Acquire device failed for node %s",
@@ -488,6 +494,13 @@ static int __cam_node_handle_dump_dev(struct cam_node *node,
 		CAM_ERR_RATE_LIMIT(CAM_CORE,
 			"Can not get context for handle %d",
 			dump->dev_handle);
+		return -EINVAL;
+	}
+
+	if (strcmp(node->name, ctx->dev_name)) {
+		CAM_ERR_RATE_LIMIT(CAM_CORE,
+			"node name %s dev name:%s not matching",
+			node->name, ctx->dev_name);
 		return -EINVAL;
 	}
 

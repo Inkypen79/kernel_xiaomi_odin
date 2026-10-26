@@ -310,8 +310,11 @@ static int cam_jpeg_mgr_process_irq(void *priv, void *data)
 
 	cmd_buf_kaddr = (uint32_t *)kaddr;
 
-	if ((p_cfg_req->hw_cfg_args.hw_update_entries[CAM_JPEG_PARAM].offset /
-			sizeof(uint32_t)) >= cmd_buf_len) {
+	if ((p_cfg_req->hw_cfg_args.hw_update_entries[CAM_JPEG_PARAM].offset >=
+			cmd_buf_len) ||
+		((cmd_buf_len - p_cfg_req->hw_cfg_args.hw_update_entries[
+			CAM_JPEG_PARAM].offset) <
+			sizeof(struct cam_jpeg_config_inout_param_info))) {
 		CAM_ERR(CAM_JPEG, "Invalid offset: %u cmd buf len: %zu",
 			p_cfg_req->hw_cfg_args.hw_update_entries[
 			CAM_JPEG_PARAM].offset, cmd_buf_len);

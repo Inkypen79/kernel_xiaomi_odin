@@ -573,7 +573,14 @@ static int cam_sem1215_ois_fw_download(struct cam_ois_ctrl_t *o_ctrl)
 	/* Get FW Ver from Binary File */
 	snprintf(name_prog, 32, "%s.prog", o_ctrl->ois_name);
 	fw_name_prog = name_prog;
-	load_fw_buff(o_ctrl, fw_name_prog,fw_data, APP_FW_SIZE);
+	if (!chkBuff || !fw_data ||
+		load_fw_buff(o_ctrl, fw_name_prog, fw_data, APP_FW_SIZE)) {
+		CAM_ERR(CAM_OIS, "Failed to prepare FW buffer for %s",
+			fw_name_prog);
+		vfree(chkBuff);
+		vfree(fw_data);
+		return -EINVAL;
+	}
 	new_fw_ver = *(uint32_t *)&fw_data[APP_FW_SIZE - 12];  /* 0x7FF4 ~ 0x7FF7 */
 
 	I2C_Read_Data(o_ctrl,REG_APP_VER, 4, rxdata);
@@ -979,7 +986,8 @@ static int cam_ois_pkt_parse(struct cam_ois_ctrl_t *o_ctrl, void *arg)
 				if (rc < 0) {
 					CAM_ERR(CAM_OIS,
 						"pre init settings parsing failed: %d", rc);
-					return rc;
+					delete_request(i2c_reg_settings);
+					break;
 				}
 			} else if ((o_ctrl->is_ois_post_init != 0) &&
 				(o_ctrl->i2c_post_init_data.is_settings_valid ==
@@ -996,7 +1004,8 @@ static int cam_ois_pkt_parse(struct cam_ois_ctrl_t *o_ctrl, void *arg)
 				if (rc < 0) {
 					CAM_ERR(CAM_OIS,
 						"post init settings parsing failed: %d", rc);
-					return rc;
+					delete_request(i2c_reg_settings);
+					break;
 				}
 			} //xiaomi add end
 			break;
@@ -1100,6 +1109,8 @@ static int cam_ois_pkt_parse(struct cam_ois_ctrl_t *o_ctrl, void *arg)
 				"Fail deleting Calibration data: rc: %d", rc);
 			rc = 0;
 		}
+		/* powered up and fully initialized */
+		o_ctrl->init_failed = false;
 		break;
 	case CAM_OIS_PACKET_OPCODE_OIS_CONTROL:
 		if (o_ctrl->cam_ois_state < CAM_OIS_CONFIG) {
@@ -1178,6 +1189,7 @@ static int cam_ois_pkt_parse(struct cam_ois_ctrl_t *o_ctrl, void *arg)
 			cmd_desc, 1, &io_cfg[0]);
 		if (rc < 0) {
 			CAM_ERR(CAM_OIS, "OIS read pkt parsing failed: %d", rc);
+			delete_request(&i2c_read_settings);
 			goto end;
 		}
 
@@ -1228,18 +1240,21 @@ static int cam_ois_pkt_parse(struct cam_ois_ctrl_t *o_ctrl, void *arg)
 			cmd_desc, 1, NULL);
 		if (rc < 0) {
 			CAM_ERR(CAM_OIS, "OIS pkt parsing failed: %d", rc);
+			delete_request(i2c_reg_settings);
 			goto end;
 		}
 
 		rc = cam_ois_update_time(i2c_reg_settings);
 		if (rc < 0) {
 			CAM_ERR(CAM_OIS, "Cannot update time");
+			delete_request(i2c_reg_settings);
 			goto end;
 		}
 
 		rc = cam_ois_apply_settings(o_ctrl, i2c_reg_settings);
 		if (rc < 0) {
 			CAM_ERR(CAM_OIS, "Cannot apply mode settings");
+			delete_request(i2c_reg_settings);
 			goto end;
 		}
 
@@ -1262,7 +1277,17 @@ static int cam_ois_pkt_parse(struct cam_ois_ctrl_t *o_ctrl, void *arg)
 		goto end;
 
 pwr_dwn:
+	/* only reached from INIT after a successful power-up */
 	cam_ois_power_down(o_ctrl);
+	/* powered down: don't let release/shutdown power down again */
+	o_ctrl->cam_ois_state = CAM_OIS_ACQUIRE;
+	/* drop parsed settings so a retried INIT parses cleanly */
+	delete_request(&o_ctrl->i2c_init_data);
+	delete_request(&o_ctrl->i2c_calib_data);
+	delete_request(&o_ctrl->i2c_pre_init_data);
+	delete_request(&o_ctrl->i2c_post_init_data);
+	/* let START/STOP succeed as no-ops: stream without OIS */
+	o_ctrl->init_failed = true;
 end:
 	cam_common_mem_free(csl_packet);
 put_ref:
@@ -1319,6 +1344,7 @@ void cam_ois_shutdown(struct cam_ois_ctrl_t *o_ctrl)
 	power_info->power_setting_size = 0;
 
 	o_ctrl->cam_ois_state = CAM_OIS_INIT;
+	o_ctrl->init_failed = false;
 }
 
 /**
@@ -1373,8 +1399,16 @@ int cam_ois_driver_cmd(struct cam_ois_ctrl_t *o_ctrl, void *arg)
 		}
 
 		o_ctrl->cam_ois_state = CAM_OIS_ACQUIRE;
+		o_ctrl->init_failed = false;
 		break;
 	case CAM_START_DEV:
+		if (o_ctrl->init_failed &&
+			(o_ctrl->cam_ois_state == CAM_OIS_ACQUIRE)) {
+			/* INIT failed and OIS is off: stream on without OIS */
+			CAM_WARN(CAM_OIS,
+				"OIS init failed, start is a no-op");
+			break;
+		}
 		if (o_ctrl->cam_ois_state != CAM_OIS_CONFIG) {
 			rc = -EINVAL;
 			CAM_WARN(CAM_OIS,
@@ -1421,6 +1455,7 @@ int cam_ois_driver_cmd(struct cam_ois_ctrl_t *o_ctrl, void *arg)
 		o_ctrl->bridge_intf.link_hdl = -1;
 		o_ctrl->bridge_intf.session_hdl = -1;
 		o_ctrl->cam_ois_state = CAM_OIS_INIT;
+		o_ctrl->init_failed = false;
 
 		kfree(power_info->power_setting);
 		kfree(power_info->power_down_setting);
@@ -1446,11 +1481,23 @@ int cam_ois_driver_cmd(struct cam_ois_ctrl_t *o_ctrl, void *arg)
 
 		break;
 	case CAM_STOP_DEV:
+		if (o_ctrl->init_failed &&
+			(o_ctrl->cam_ois_state == CAM_OIS_ACQUIRE)) {
+			/* matching no-op for the START above */
+			CAM_DBG(CAM_OIS, "OIS init failed, stop is a no-op");
+			break;
+		}
 		if (o_ctrl->cam_ois_state != CAM_OIS_START) {
 			rc = -EINVAL;
 			CAM_WARN(CAM_OIS,
 			"Not in right state for stop : %d",
 			o_ctrl->cam_ois_state);
+			/*
+			 * Don't promote to CONFIG from a non-START state: a
+			 * powered-down device marked CONFIG would be powered
+			 * down a second time on release/shutdown.
+			 */
+			break;
 		}
 		o_ctrl->cam_ois_state = CAM_OIS_CONFIG;
 		break;

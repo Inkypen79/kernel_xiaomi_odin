@@ -758,6 +758,7 @@ int32_t cam_actuator_i2c_pkt_parse(struct cam_actuator_ctrl_t *a_ctrl,
 		if (rc < 0) {
 			CAM_ERR(CAM_ACTUATOR,
 				"actuator read pkt parsing failed: %d", rc);
+			delete_request(&i2c_read_settings);
 			goto end;
 		}
 

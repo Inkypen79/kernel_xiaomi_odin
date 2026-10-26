@@ -681,7 +681,10 @@ int cam_sensor_i2c_command_parser(
 			}
 			case CAMERA_SENSOR_CMD_TYPE_WAIT: {
 				if ((remain_len - byte_cnt) <
-				sizeof(struct cam_cmd_unconditional_wait)) {
+				((generic_op_code ==
+				CAMERA_SENSOR_WAIT_OP_COND) ?
+				sizeof(struct cam_cmd_conditional_wait) :
+				sizeof(struct cam_cmd_unconditional_wait))) {
 					CAM_ERR(CAM_SENSOR,
 						"Not enough buffer space");
 					rc = -EINVAL;

@@ -51,6 +51,13 @@ int cam_isp_add_change_base(
 			get_base.res  = res;
 			get_base.cdm_id = change_base_args->cdm_id;
 			get_base.cmd_type = CAM_ISP_HW_CMD_GET_CHANGE_BASE;
+			if (kmd_buf_info->used_bytes >= kmd_buf_info->size) {
+				CAM_ERR(CAM_ISP,
+					"No space in kmd buf, size %u used %u",
+					kmd_buf_info->size,
+					kmd_buf_info->used_bytes);
+				return -ENOMEM;
+			}
 			get_base.cmd.cmd_buf_addr = kmd_buf_info->cpu_addr +
 				kmd_buf_info->used_bytes/4;
 			get_base.cmd.size  = kmd_buf_info->size -

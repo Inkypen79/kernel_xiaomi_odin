@@ -542,7 +542,8 @@ static int cam_icp_remove_ctx_bw(struct cam_icp_hw_mgr *hw_mgr,
 				CAM_AXI_PATH_DATA_IPE_START_OFFSET;
 			}
 
-			if (path_index >= CAM_ICP_MAX_PER_PATH_VOTES) {
+			if ((path_index < 0) ||
+				(path_index >= CAM_ICP_MAX_PER_PATH_VOTES)) {
 				CAM_WARN(CAM_PERF,
 				"Invalid path %d, start offset=%d, max=%d",
 				ctx_data->clk_info.axi_path[i].path_data_type,
@@ -1162,7 +1163,8 @@ static bool cam_icp_update_bw_v2(struct cam_icp_hw_mgr *hw_mgr,
 				CAM_AXI_PATH_DATA_IPE_START_OFFSET;
 		}
 
-		if (path_index >= CAM_ICP_MAX_PER_PATH_VOTES) {
+		if ((path_index < 0) ||
+			(path_index >= CAM_ICP_MAX_PER_PATH_VOTES)) {
 			CAM_WARN(CAM_PERF,
 				"Invalid path %d, start offset=%d, max=%d",
 				ctx_data->clk_info.axi_path[i].path_data_type,
@@ -1206,7 +1208,8 @@ static bool cam_icp_update_bw_v2(struct cam_icp_hw_mgr *hw_mgr,
 				CAM_AXI_PATH_DATA_IPE_START_OFFSET;
 		}
 
-		if (path_index >= CAM_ICP_MAX_PER_PATH_VOTES) {
+		if ((path_index < 0) ||
+			(path_index >= CAM_ICP_MAX_PER_PATH_VOTES)) {
 			CAM_WARN(CAM_PERF,
 				"Invalid path %d, start offset=%d, max=%d",
 				ctx_data->clk_info.axi_path[i].path_data_type,
@@ -4301,6 +4304,7 @@ static int cam_icp_mgr_process_io_cfg(struct cam_icp_hw_mgr *hw_mgr,
 	int32_t index)
 {
 	int i, j, k, rc = 0;
+	uint32_t num_io_configs, direction;
 	struct cam_buf_io_cfg *io_cfg_ptr = NULL;
 	int32_t sync_in_obj[CAM_MAX_IN_RES];
 	int32_t merged_sync_in_obj;
@@ -4310,18 +4314,31 @@ static int cam_icp_mgr_process_io_cfg(struct cam_icp_hw_mgr *hw_mgr,
 	prepare_args->num_out_map_entries = 0;
 	prepare_args->num_in_map_entries = 0;
 
-	for (i = 0, j = 0, k = 0; i < packet->num_io_configs; i++) {
-		if (io_cfg_ptr[i].direction == CAM_BUF_INPUT) {
+	/* packet is user-shared memory: fetch counts once, bound indices */
+	num_io_configs = READ_ONCE(packet->num_io_configs);
+	for (i = 0, j = 0, k = 0; i < num_io_configs; i++) {
+		direction = READ_ONCE(io_cfg_ptr[i].direction);
+		if (direction == CAM_BUF_INPUT) {
+			if (j >= CAM_MAX_IN_RES) {
+				CAM_ERR(CAM_ICP, "Too many in configs, max %d",
+					CAM_MAX_IN_RES);
+				return -EINVAL;
+			}
 			sync_in_obj[j++] = io_cfg_ptr[i].fence;
 			prepare_args->num_in_map_entries++;
-		} else if ((io_cfg_ptr[i].direction == CAM_BUF_OUTPUT) ||
-			(io_cfg_ptr[i].direction == CAM_BUF_IN_OUT)) {
+		} else if ((direction == CAM_BUF_OUTPUT) ||
+			(direction == CAM_BUF_IN_OUT)) {
+			if (k >= prepare_args->max_out_map_entries) {
+				CAM_ERR(CAM_ICP, "Too many out configs, max %u",
+					prepare_args->max_out_map_entries);
+				return -EINVAL;
+			}
 			prepare_args->out_map_entries[k++].sync_id =
 				io_cfg_ptr[i].fence;
 			prepare_args->num_out_map_entries++;
 		} else {
 			CAM_ERR(CAM_ICP, "dir: %d, max_out:%u, out %u",
-				io_cfg_ptr[i].direction,
+				direction,
 				prepare_args->max_out_map_entries,
 				prepare_args->num_out_map_entries);
 			return -EINVAL;
@@ -4372,6 +4389,7 @@ static int cam_icp_mgr_process_io_cfg(struct cam_icp_hw_mgr *hw_mgr,
 static int cam_icp_process_stream_settings(
 	struct cam_icp_hw_ctx_data *ctx_data,
 	struct cam_cmd_mem_regions *cmd_mem_regions,
+	uint32_t num_regions,
 	bool map_unmap)
 {
 	int rc = 0, i = 0;
@@ -4382,16 +4400,17 @@ static int cam_icp_process_stream_settings(
 	struct hfi_cmd_ipe_bps_map  *map_cmd;
 	struct hfi_cmd_ipebps_async *async_direct;
 
+	/* num_regions is validated by the caller against the blob size */
 	map_cmd_size =
 		sizeof(struct hfi_cmd_ipe_bps_map) +
-		((cmd_mem_regions->num_regions - 1) *
+		((num_regions - 1) *
 		sizeof(struct mem_map_region_data));
 
 	map_cmd = kzalloc(map_cmd_size, GFP_KERNEL);
 	if (!map_cmd)
 		return -ENOMEM;
 
-	for (i = 0; i < cmd_mem_regions->num_regions; i++) {
+	for (i = 0; i < num_regions; i++) {
 		rc = cam_mem_get_io_buf(
 			cmd_mem_regions->map_info_array[i].mem_handle,
 			icp_hw_mgr.iommu_hdl, &iova, &len);
@@ -4412,13 +4431,13 @@ static int cam_icp_process_stream_settings(
 			(uint32_t)iova, (uint32_t)len);
 	}
 
-	map_cmd->mem_map_request_num = cmd_mem_regions->num_regions;
+	map_cmd->mem_map_request_num = num_regions;
 	map_cmd->user_data = 0;
 
 	packet_size =
 		sizeof(struct hfi_cmd_ipebps_async) +
 		(sizeof(struct hfi_cmd_ipe_bps_map) +
-		((cmd_mem_regions->num_regions - 1) *
+		((num_regions - 1) *
 		sizeof(struct mem_map_region_data))) -
 		sizeof(((struct hfi_cmd_ipebps_async *)0)->payload.direct);
 
@@ -4480,6 +4499,7 @@ static int cam_icp_packet_generic_blob_handler(void *user_data,
 	int rc = 0;
 	uintptr_t pResource;
 	uint32_t i = 0;
+	uint32_t num_paths, num_regions;
 
 	if (!blob_data || (blob_size == 0)) {
 		CAM_ERR(CAM_ICP, "Invalid blob info %pK %d", blob_data,
@@ -4543,21 +4563,23 @@ static int cam_icp_packet_generic_blob_handler(void *user_data,
 		}
 
 		soc_req_v2 = (struct cam_icp_clk_bw_request_v2 *)blob_data;
-		if (soc_req_v2->num_paths > CAM_ICP_MAX_PER_PATH_VOTES) {
+		/* blob is user-shared memory: fetch num_paths only once */
+		num_paths = READ_ONCE(soc_req_v2->num_paths);
+		if (num_paths > CAM_ICP_MAX_PER_PATH_VOTES) {
 			CAM_ERR(CAM_PERF, "Invalid num paths: %d",
-				soc_req_v2->num_paths);
+				num_paths);
 			return -EINVAL;
 		}
 
 		/* Check for integer overflow */
-		if (soc_req_v2->num_paths != 1) {
+		if (num_paths != 1) {
 			if (sizeof(struct cam_axi_per_path_bw_vote) >
 				((UINT_MAX -
 				sizeof(struct cam_icp_clk_bw_request_v2)) /
-				(soc_req_v2->num_paths - 1))) {
+				(num_paths - 1))) {
 				CAM_ERR(CAM_ICP,
 					"Size exceeds limit paths:%u size per path:%lu",
-					soc_req_v2->num_paths - 1,
+					num_paths - 1,
 					sizeof(
 					struct cam_axi_per_path_bw_vote));
 				return -EINVAL;
@@ -4565,7 +4587,7 @@ static int cam_icp_packet_generic_blob_handler(void *user_data,
 		}
 
 		clk_update_size = sizeof(struct cam_icp_clk_bw_request_v2) +
-			((soc_req_v2->num_paths - 1) *
+			((num_paths - 1) *
 			sizeof(struct cam_axi_per_path_bw_vote));
 		if (blob_size < clk_update_size) {
 			CAM_ERR(CAM_ICP, "Invalid blob size: %u",
@@ -4577,6 +4599,7 @@ static int cam_icp_packet_generic_blob_handler(void *user_data,
 		clk_info_v2 = &ctx_data->hfi_frame_process.clk_info_v2[index];
 
 		memcpy(clk_info_v2, soc_req_v2, clk_update_size);
+		clk_info_v2->num_paths = num_paths;
 
 		/* Use v1 structure for clk fields */
 		clk_info->budget_ns = clk_info_v2->budget_ns;
@@ -4630,34 +4653,48 @@ static int cam_icp_packet_generic_blob_handler(void *user_data,
 	case CAM_ICP_CMD_GENERIC_BLOB_FW_MEM_MAP:
 		cmd_mem_regions =
 			(struct cam_cmd_mem_regions *)blob_data;
-		if (cmd_mem_regions->num_regions <= 0) {
+		if (blob_size < sizeof(struct cam_cmd_mem_regions)) {
+			CAM_ERR(CAM_ICP, "Invalid blob size %u", blob_size);
+			return -EINVAL;
+		}
+		num_regions = READ_ONCE(cmd_mem_regions->num_regions);
+		if (!num_regions || ((num_regions - 1) >
+			((blob_size - sizeof(struct cam_cmd_mem_regions)) /
+			sizeof(struct cam_cmd_mem_region_info)))) {
 			rc = -EINVAL;
 			CAM_ERR(CAM_ICP,
-				"Invalid number of regions for FW map %u",
-				cmd_mem_regions->num_regions);
+				"Invalid number of regions for FW map %u blob size %u",
+				num_regions, blob_size);
 		} else {
 			CAM_DBG(CAM_ICP,
 				"Processing blob for mapping %u regions",
-				cmd_mem_regions->num_regions);
+				num_regions);
 			rc = cam_icp_process_stream_settings(ctx_data,
-				cmd_mem_regions, true);
+				cmd_mem_regions, num_regions, true);
 		}
 		break;
 
 	case CAM_ICP_CMD_GENERIC_BLOB_FW_MEM_UNMAP:
 		cmd_mem_regions =
 			(struct cam_cmd_mem_regions *)blob_data;
-		if (cmd_mem_regions->num_regions <= 0) {
+		if (blob_size < sizeof(struct cam_cmd_mem_regions)) {
+			CAM_ERR(CAM_ICP, "Invalid blob size %u", blob_size);
+			return -EINVAL;
+		}
+		num_regions = READ_ONCE(cmd_mem_regions->num_regions);
+		if (!num_regions || ((num_regions - 1) >
+			((blob_size - sizeof(struct cam_cmd_mem_regions)) /
+			sizeof(struct cam_cmd_mem_region_info)))) {
 			rc = -EINVAL;
 			CAM_ERR(CAM_ICP,
-				"Invalid number of regions for FW unmap %u",
-				cmd_mem_regions->num_regions);
+				"Invalid number of regions for FW unmap %u blob size %u",
+				num_regions, blob_size);
 		} else {
 			CAM_DBG(CAM_ICP,
 				"Processing blob for unmapping %u regions",
-				cmd_mem_regions->num_regions);
+				num_regions);
 			rc = cam_icp_process_stream_settings(ctx_data,
-				cmd_mem_regions, false);
+				cmd_mem_regions, num_regions, false);
 		}
 		break;
 
@@ -4924,8 +4961,10 @@ static int cam_icp_mgr_prepare_hw_update(void *hw_mgr_priv,
 
 	packet = prepare_args->packet;
 
-	if (cam_packet_util_validate_packet(packet, prepare_args->remain_len))
+	if (cam_packet_util_validate_packet(packet, prepare_args->remain_len)) {
+		mutex_unlock(&ctx_data->ctx_mutex);
 		return -EINVAL;
+	}
 
 	rc = cam_icp_mgr_pkt_validation(packet);
 	if (rc) {
@@ -5731,7 +5770,7 @@ static int cam_icp_mgr_acquire_hw(void *hw_mgr_priv, void *acquire_hw_args)
 	cmd_mem_region.map_info_array[0].flags = 0;
 
 	rc = cam_icp_process_stream_settings(ctx_data,
-		&cmd_mem_region, true);
+		&cmd_mem_region, cmd_mem_region.num_regions, true);
 	if (rc) {
 		CAM_ERR(CAM_ICP,
 			"sending config io mapping failed rc %d", rc);
@@ -5750,7 +5789,7 @@ static int cam_icp_mgr_acquire_hw(void *hw_mgr_priv, void *acquire_hw_args)
 	}
 
 	rc = cam_icp_process_stream_settings(ctx_data,
-		&cmd_mem_region, false);
+		&cmd_mem_region, cmd_mem_region.num_regions, false);
 	if (rc) {
 		CAM_ERR(CAM_ICP,
 			"sending config io unmapping failed %d", rc);
@@ -5812,7 +5851,7 @@ copy_to_user_failed:
 	ctx_data->hfi_frame_process.bitmap = NULL;
 ioconfig_failed:
 	cam_icp_process_stream_settings(ctx_data,
-		&cmd_mem_region, false);
+		&cmd_mem_region, cmd_mem_region.num_regions, false);
 send_map_info_failed:
 	cam_icp_mgr_destroy_handle(ctx_data);
 create_handle_failed:

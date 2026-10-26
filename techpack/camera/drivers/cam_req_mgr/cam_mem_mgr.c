@@ -1228,7 +1228,12 @@ void cam_mem_put_cpu_buf(int32_t buf_handle)
 	krefcount = kref_read(&tbl.bufq[idx].krefcount);
 	urefcount = kref_read(&tbl.bufq[idx].urefcount);
 
-	if ((krefcount == 1) && (urefcount == 0))
+	/*
+	 * Kernel-owned buffers (request_mem/reserve_memory_region) have no
+	 * user reference and are released only via their own release path.
+	 */
+	if ((krefcount == 1) && (urefcount == 0) &&
+		(tbl.bufq[idx].smmu_mapping_client == CAM_SMMU_MAPPING_USER))
 		unmap = true;
 
 	if (unmap) {
