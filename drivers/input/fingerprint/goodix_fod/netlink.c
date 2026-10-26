@@ -15,7 +15,8 @@
 #define MAX_MSGSIZE 32
 int stringlength(char *s);
 void sendnlmsg(char *message);
-static int pid = -1;
+/* netlink portid of the HAL socket; 0 (the kernel) means not registered yet */
+static u32 pid;
 struct sock *nl_sk;
 
 void sendnlmsg(char *message)
@@ -45,7 +46,7 @@ void sendnlmsg(char *message)
 	memcpy(NLMSG_DATA(nlh), message, slen + 1);
 	ret = netlink_unicast(nl_sk, skb_1, pid, MSG_DONTWAIT);
 
-	if (!ret) {
+	if (ret < 0) {
 		/*kfree_skb(skb_1); */
 		pr_err("send msg from kernel to usespace failed ret 0x%x\n",
 		       ret);
@@ -56,15 +57,14 @@ void nl_data_ready(struct sk_buff *__skb)
 {
 	struct sk_buff *skb;
 	struct nlmsghdr *nlh;
-	char str[100];
 	skb = skb_get(__skb);
 
+	/* only the sender's portid is used; the payload is ignored */
 	if (skb->len >= NLMSG_SPACE(0)) {
 		nlh = nlmsg_hdr(skb);
-		memcpy(str, NLMSG_DATA(nlh), sizeof(str));
 		pid = nlh->nlmsg_pid;
-		kfree_skb(skb);
 	}
+	kfree_skb(skb);
 }
 
 int netlink_init(void)

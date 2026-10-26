@@ -332,6 +332,8 @@ struct fts_ts_info {
 	struct work_struct work;
 	struct work_struct suspend_work;
 	struct work_struct resume_work;
+	struct work_struct pm_work;	/* applies want_sleep on event_wq */
+	bool want_sleep;		/* last sensor state requested */
 	struct work_struct cmd_update_work;
 	struct work_struct sleep_work;
 	struct work_struct mode_handler_work;

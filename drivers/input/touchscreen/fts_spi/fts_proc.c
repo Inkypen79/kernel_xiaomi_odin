@@ -177,6 +177,8 @@ static int chunk;
 static int printed;
 static struct proc_dir_entry *fts_dir;
 static u8 *driver_test_buff;
+/* serializes driver_test_buff/limit/chunk/printed between readers and writers */
+static DEFINE_MUTEX(fts_proc_lock);
 char buf_chunk[CHUNK_PROC];
 static Message mess;
 
@@ -189,22 +191,27 @@ static Message mess;
 */
 static void *fts_seq_start(struct seq_file *s, loff_t *pos)
 {
+	/* released in fts_seq_stop(), which seq_file always pairs with start */
+	mutex_lock(&fts_proc_lock);
 	logError(0,
 		 "%s %s: Entering start(), pos = %Ld limit = %d printed = %d \n",
 		 tag, __func__, *pos, limit, printed);
 
 	if (driver_test_buff == NULL && *pos == 0) {
 		logError(1, "%s %s: No data to print!\n", tag, __func__);
-		driver_test_buff = (u8 *) kmalloc(13 * sizeof(u8), GFP_KERNEL);
+		/* "{ XXXXXXXX }\n" is 13 chars plus the NUL */
+		driver_test_buff = kmalloc(14, GFP_KERNEL);
+		if (!driver_test_buff)
+			return NULL;
 
-		snprintf(driver_test_buff, PAGE_SIZE, "{ %08X }\n", ERROR_OP_NOT_ALLOW);
+		snprintf(driver_test_buff, 14, "{ %08X }\n", ERROR_OP_NOT_ALLOW);
 
 		limit = strlen(driver_test_buff);
 	} else {
 		if (*pos != 0)
 			*pos += chunk - 1;
 
-		if (*pos >= limit) {
+		if (!driver_test_buff || *pos >= limit) {
 			return NULL;
 		}
 	}
@@ -277,7 +284,7 @@ static void fts_seq_stop(struct seq_file *s, void *v)
 			/*logError(0, "%s %s: driver_test_buff is already null.\n", tag, __func__);*/
 		}
 	}
-
+	mutex_unlock(&fts_proc_lock);
 }
 
 /**
@@ -353,6 +360,7 @@ static ssize_t fts_driver_test_write(struct file *file, const char __user *buf,
 	const char *limit_file_name = NULL;
 	limit_file_name = fts_get_limit(info);
 
+	mutex_lock(&fts_proc_lock);
 	mess.dummy = 0;
 	mess.action = 0;
 	mess.msg_size = 0;
@@ -363,7 +371,8 @@ static ssize_t fts_driver_test_write(struct file *file, const char __user *buf,
 		goto END;
 	}
 
-	pbuf = (u8 *)kzalloc(sizeof(u8) * count, GFP_KERNEL);
+	/* +1: keep the user string NUL terminated for sscanf() */
+	pbuf = (u8 *)kzalloc(sizeof(u8) * (count + 1), GFP_KERNEL);
 	if (!pbuf) {
 		res = -ENOMEM;
 		goto END;
@@ -480,7 +489,10 @@ static ssize_t fts_driver_test_write(struct file *file, const char __user *buf,
 		case CMD_GETLIMITSFILE:
 			if (count - 2 - 1 > 1) {
 				numberParam = 2;
-				sscanf(p, "%100s", path);
+				if (sscanf(p, "%99s", path) < 1) {
+					res = ERROR_OP_NOT_ALLOW;
+					goto END;
+				}
 			}
 			break;
 
@@ -2425,6 +2437,7 @@ ERROR:
 	cmd = NULL;
 	pbuf = NULL;
 	funcToTest = NULL;
+	mutex_unlock(&fts_proc_lock);
 	return count;
 }
 

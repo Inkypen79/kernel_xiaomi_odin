@@ -136,6 +136,7 @@ static int fts_chip_initialization(struct fts_ts_info *info, int init_type);
 static irqreturn_t fts_event_handler(int irq, void *ts_info);
 static int fts_enable_reg(struct fts_ts_info *info, bool enable);
 static int fts_mode_handler(struct fts_ts_info *info, int force);
+static void fts_request_sleep(struct fts_ts_info *info, bool sleep);
 #ifdef FTS_XIAOMI_TOUCHFEATURE
 static int fts_set_cur_value(int mode, int value);
 #endif
@@ -231,7 +232,7 @@ static ssize_t fts_fwupdate_store(struct device *dev,
 				  const char *buf, size_t count)
 {
 	int ret, mode[2];
-	char path[100];
+	char path[100] = { 0 };
 	struct fts_ts_info *info = dev_get_drvdata(dev);
 
 	/* by default(if not specified by the user) set the force = 0 and keep_cx to 1 */
@@ -239,7 +240,8 @@ static ssize_t fts_fwupdate_store(struct device *dev,
 	mode[1] = 1;
 
 	/* reading out firmware upgrade parameters */
-	sscanf(buf, "%100s %d %d", path, &mode[0], &mode[1]);
+	if (sscanf(buf, "%99s %d %d", path, &mode[0], &mode[1]) < 1)
+		return -EINVAL;
 	logError(1, "%s fts_fwupdate_store: mode = %s \n", tag, path);
 
 	ret = flashProcedure(path, mode[0], mode[1]);
@@ -1117,15 +1119,18 @@ static ssize_t fts_gesture_coordinates_show(struct device *dev,
 	int size = (6 * 2) + 1, index = 0;
 	u8 *all_strbuff = NULL;
 	int count = 0, res, i = 0;
+	/* updated concurrently by the IRQ thread: sample it once */
+	int ncoords = READ_ONCE(gesture_coords_reported);
 
 	logError(0, "%s %s: Getting gestures coordinates... \n", tag, __func__);
 
-	if (gesture_coords_reported < OK) {
+	if (ncoords < OK) {
 		logError(1, "%s %s: invalid coordinates! ERROR %08X \n", tag,
-			 __func__, gesture_coords_reported);
-		res = gesture_coords_reported;
+			 __func__, ncoords);
+		res = ncoords;
 	} else {
-		size += gesture_coords_reported * 2 * 4 + 2;
+		ncoords = min(ncoords, GESTURE_MAX_COORDS_PAIRS_REPORT);
+		size += ncoords * 2 * 4 + 2;
 		res = OK;
 	}
 
@@ -1137,10 +1142,10 @@ static ssize_t fts_gesture_coordinates_show(struct device *dev,
 
 		if (res >= OK) {
 			snprintf(&all_strbuff[index], 3, "%02X",
-				 gesture_coords_reported);
+				 ncoords);
 			index += 2;
 
-			for (i = 0; i < gesture_coords_reported; i++) {
+			for (i = 0; i < ncoords; i++) {
 				snprintf(&all_strbuff[index], 5, "%04X",
 					 gesture_coordinates_x[i]);
 				index += 4;
@@ -1692,6 +1697,7 @@ static ssize_t fts_lockdown_show(struct device *dev,
 
 	temp_buffer = (u8 *) kmalloc(LOCKDOWN_LENGTH * sizeof(u8), GFP_KERNEL);
 	if (temp_buffer == NULL || numberParameters < 2) {
+		kfree(temp_buffer);
 		count +=
 		    snprintf(&buf[count], PAGE_SIZE, "prepare read lockdown failded\n");
 		return count;
@@ -2678,8 +2684,8 @@ static int fts_enable_thp_cmd (bool on)
 int fts_enable_touch_raw(int en)
 {
 #ifdef TOUCH_THP_FW
-	char ret;
-	char mode[2];
+	int ret;	/* char is unsigned on arm64: every "ret < OK" was false */
+	char mode[2] = { 0, 0 };	/* force, keep_cx: what zero-init gave so far */
 	const char *fw_name;
 	bool update = false;
 	u8 error_to_search[4] = {EVT_TYPE_ERROR_CRC_CX_HEAD, EVT_TYPE_ERROR_CRC_CX,
@@ -2694,7 +2700,11 @@ int fts_enable_touch_raw(int en)
 
 		if (fw_name != NULL && !fts_info->enable_thp_fw) {
 			ret = flashProcedure(fw_name, mode[0], mode[1]);
-			if (ret < OK) {
+			/*
+			 * Same test as fts_fw_update(): only ERROR_FLASH_PROCEDURE
+			 * is fatal; e.g. "fw already in the chip" (0x8008000C) is not.
+			 */
+			if ((ret & 0xFF000000) == ERROR_FLASH_PROCEDURE) {
 				logError(1, "%s  %s Unable to upgrade firmware! ERROR %08X\n",
 					 tag, __func__, ret);
 				fts_enableInterrupt();
@@ -2710,9 +2720,15 @@ int fts_enable_touch_raw(int en)
 		fw_name = fts_get_config(fts_info);
 		if (fw_name != NULL && fts_info->enable_thp_fw) {
 			ret = flashProcedure(fw_name, mode[0], mode[1]);
-			if (ret < OK) {
+			if ((ret & 0xFF000000) == ERROR_FLASH_PROCEDURE) {
 				logError(1, "%s  %s Unable to upgrade firmware! ERROR %08X\n",
 					 tag, __func__, ret);
+				/*
+				 * Leave raw mode anyway so pointer events are reported
+				 * again; enable_thp_fw stays set so the next disable
+				 * retries flashing the normal fw.
+				 */
+				fts_info->enable_touch_raw = false;
 				fts_enableInterrupt();
 				return -1;
 			}
@@ -3778,6 +3794,20 @@ static struct attribute *fts_attr_group[] = {
 static DEVICE_ATTR(fod_test, (S_IRUGO | S_IWUSR | S_IWGRP), NULL, fts_fod_test_store);
 #endif
 static DEVICE_ATTR(ellipse_data, (S_IRUGO), fts_ellipse_data_show, NULL);
+
+/* tp_dev nodes, attached at device_create time (present at KOBJ_ADD) */
+static struct attribute *fts_tp_dev_attrs[] = {
+#ifdef FTS_FOD_AREA_REPORT
+	&dev_attr_fod_test.attr,
+	&dev_attr_fod_status.attr,
+#endif
+#ifdef GESTURE_MODE
+	&dev_attr_double_tap.attr,
+#endif
+	&dev_attr_ellipse_data.attr,
+	NULL,
+};
+ATTRIBUTE_GROUPS(fts_tp_dev);
 
 #ifdef CONFIG_SECURE_TOUCH
 DEVICE_ATTR(secure_touch_enable, (S_IRUGO | S_IWUSR | S_IWGRP), fts_secure_touch_enable_show,  fts_secure_touch_enable_store);
@@ -5313,6 +5343,7 @@ static int fts_interrupt_install(struct fts_ts_info *info)
 			 FTS_TS_DRV_NAME, info)) {
 		logError(1, "%s Request irq failed\n", tag);
 		kfree(info->event_dispatch_table);
+		info->event_dispatch_table = NULL;
 		error = -EBUSY;
 	} else {
 		disable_irq(info->client->irq);
@@ -6206,6 +6237,21 @@ static void fts_update_touchmode_data(void)
 	const struct fts_hw_platform_data *bdata = fts_info->board;
 	static bool expert_mode = false;
 
+	/*
+	 * Nothing to send (e.g. resetMode(0) on every suspend/resume with
+	 * defaults already applied): don't block event_wq waiting for
+	 * finger up.
+	 */
+	for (i = 0; i < Touch_Mode_NUM; i++) {
+		if (xiaomi_touch_interfaces.touch_mode[i][GET_CUR_VALUE] !=
+				xiaomi_touch_interfaces.touch_mode[i][SET_CUR_VALUE])
+			break;
+	}
+	if (i == Touch_Mode_NUM) {
+		logError(1, "%s %s: no update\n", tag, __func__);
+		return;
+	}
+
 	ret = wait_event_interruptible_timeout(fts_info->wait_queue, !(fts_info->irq_status ||
 	fts_info->touch_id), msecs_to_jiffies(500));
 
@@ -6372,8 +6418,12 @@ static int fts_set_fod_status(int value)
 {
 	int res = 0;
 	u8 gesture_cmd[6] = {0xA2, 0x03, 0x00, 0x00, 0x00, 0x03};
+	u8 old_lp_mode = fts_need_enter_lp_mode();
 
 	fts_info->fod_status = value;
+	/* screen off and the low power gesture set changed: re-arm */
+	if (old_lp_mode != fts_need_enter_lp_mode() && !fts_info->resume_bit)
+		schedule_work(&fts_info->switch_mode_work);
 	if (fts_info->fod_status == 2) {
 		mutex_lock(&fts_info->fod_mutex);
 		res = fts_write(gesture_cmd, ARRAY_SIZE(gesture_cmd));
@@ -6453,13 +6503,8 @@ static int fts_set_cur_value(int mode, int value)
 	}
 
 	if (mode == Touch_Power_Status && fts_info && value >= 0) {
-		flush_workqueue(fts_info->event_wq);
 		logError(1, "%s %s: switch sensor state\n", tag, __func__);
-		if (value && fts_info->sensor_sleep) {
-			queue_work(fts_info->event_wq, &fts_info->resume_work);
-		} else if (!value && !fts_info->sensor_sleep) {
-			queue_work(fts_info->event_wq, &fts_info->suspend_work);
-		}
+		fts_request_sleep(fts_info, !value);
 		return 0;
 	}
 
@@ -6861,6 +6906,30 @@ static void fts_suspend_work(struct work_struct *work)
 	xiaomi_touch_set_suspend_state(XIAOMI_TOUCH_SUSPEND);
 }
 
+/**
+ * Apply the last requested sensor state (info->want_sleep).
+ * Runs on the ordered event_wq, so requesters never need to flush it:
+ * if the state changes again while this is pending or running, the work
+ * is (re)queued and converges to the latest request.
+ */
+static void fts_pm_work(struct work_struct *work)
+{
+	struct fts_ts_info *info = container_of(work, struct fts_ts_info, pm_work);
+
+	if (READ_ONCE(info->want_sleep)) {
+		if (!info->sensor_sleep)
+			fts_suspend_work(&info->suspend_work);
+	} else if (info->sensor_sleep) {
+		fts_resume_work(&info->resume_work);
+	}
+}
+
+static void fts_request_sleep(struct fts_ts_info *info, bool sleep)
+{
+	WRITE_ONCE(info->want_sleep, sleep);
+	queue_work(info->event_wq, &info->pm_work);
+}
+
 /**@}*/
 
 static void fts_mode_handler_work(struct work_struct *work)
@@ -6870,6 +6939,19 @@ static void fts_mode_handler_work(struct work_struct *work)
 	info = container_of(work, struct fts_ts_info, mode_handler_work);
 
 	fts_mode_handler(info, 0);
+
+	/*
+	 * Screen off: suspend only armed the IRQ for the gestures enabled at
+	 * that time, so re-arm/disarm it to match the new gesture set.
+	 */
+#ifndef CONFIG_FACTORY_BUILD
+	if (!info->resume_bit && info->sensor_sleep) {
+		if (info->gesture_enabled || fts_need_enter_lp_mode())
+			fts_enableInterrupt();
+		else
+			fts_disableInterrupt();
+	}
+#endif
 }
 
 /**
@@ -6886,36 +6968,29 @@ static int fts_drm_state_chg_callback(struct notifier_block *nb,
 
 	logError(0, "%s %s: fts notifier begin!\n", tag, __func__);
 
+	if (!evdata || !evdata->data || !info)
+		return NOTIFY_OK;
+
 	if (evdata->disp_id != MI_DISPLAY_PRIMARY) {
 		logError(1, "%s %s: not primary display\n", tag, __func__);
 		return NOTIFY_OK;
 	}
 
-	if (evdata && evdata->data && info) {
+	blank = *(int *)(evdata->data);
+	logError(1, "%s %s: val:%lu,blank:%u\n", tag, __func__, val, blank);
 
-		blank = *(int *)(evdata->data);
-		logError(1, "%s %s: val:%lu,blank:%u\n", tag, __func__, val, blank);
-
-		if (val == MI_DISP_DPMS_EARLY_EVENT && (blank == MI_DISP_DPMS_POWERDOWN ||
-			blank == MI_DISP_DPMS_LP1 || blank == MI_DISP_DPMS_LP2)) {
-			if (info->sensor_sleep)
-				return NOTIFY_OK;
-
-			logError(1, "%s %s: FB_BLANK %s\n", tag,
-				 __func__, blank == MI_DISP_DPMS_POWERDOWN ? "POWER DOWN" : "LP");
-
-			flush_workqueue(info->event_wq);
-			queue_work(info->event_wq, &info->suspend_work);
-		} else if (val == MI_DISP_DPMS_EVENT && blank == MI_DISP_DPMS_ON) {
-			if (!info->sensor_sleep)
-				return NOTIFY_OK;
-
-			logError(1, "%s %s: FB_BLANK_UNBLANK\n", tag,
-				 __func__);
-
-			flush_workqueue(info->event_wq);
-			queue_work(info->event_wq, &info->resume_work);
-		}
+	/*
+	 * Called with display locks held: never block here, just record the
+	 * requested state and let pm_work apply it on the ordered event_wq.
+	 */
+	if (val == MI_DISP_DPMS_EARLY_EVENT && (blank == MI_DISP_DPMS_POWERDOWN ||
+		blank == MI_DISP_DPMS_LP1 || blank == MI_DISP_DPMS_LP2)) {
+		logError(1, "%s %s: FB_BLANK %s\n", tag,
+			 __func__, blank == MI_DISP_DPMS_POWERDOWN ? "POWER DOWN" : "LP");
+		fts_request_sleep(info, true);
+	} else if (val == MI_DISP_DPMS_EVENT && blank == MI_DISP_DPMS_ON) {
+		logError(1, "%s %s: FB_BLANK_UNBLANK\n", tag, __func__);
+		fts_request_sleep(info, false);
 	}
 	return NOTIFY_OK;
 }
@@ -7024,16 +7099,12 @@ static int fts_get_charging_status(void)
 	union power_supply_propval val;
 	int rc = 0;
 #endif
-#ifdef CONFIG_QGKI_SYSTEM
 	int is_charging = 0;
 	is_charging = !!power_supply_is_system_supplied();
 	if (!is_charging)
 		return NOT_CHARGING;
 	else
 		return CHARGING;
-#else
-	return NOT_CHARGING;
-#endif
 #if 0
 	dc_psy = power_supply_get_by_name("dc");
 	if (dc_psy) {
@@ -7804,20 +7875,16 @@ static int parse_dt(struct device *dev, struct fts_hw_platform_data *bdata)
 static void fts_switch_mode_work(struct work_struct *work)
 {
 	struct fts_ts_info *info = container_of(work, struct fts_ts_info, switch_mode_work);
-	u8 gesture_type = fts_need_enter_lp_mode();
-	u8 gesture_cmd[6] = {0xA2, 0x03, 0x00, 0x00, 0x00, gesture_type};
-	int res = 0;
 
 	if (info->resume_bit) {
 		logError(1, "%s %s touch in resume mode, don't need to set gesture cmds\n", tag, __func__);
 		return;
 	}
-	if (info->gesture_enabled)
-		gesture_cmd[2] = 0x20;
-	res = fts_write_dma_safe(gesture_cmd, ARRAY_SIZE(gesture_cmd));
-	if (res < OK)
-		logError(1, "%s %s: send gesture cmd error! ERROR %08X recovery in senseOff...\n",
-			 tag, __func__, res);
+	/*
+	 * Reprogram scan mode + gestures and re-arm the IRQ, serialized with
+	 * suspend/resume on event_wq.
+	 */
+	queue_work(info->event_wq, &info->mode_handler_work);
 }
 #endif
 
@@ -7957,7 +8024,7 @@ static ssize_t fts_selftest_read(struct file *file, char __user *buf,
 static int fts_force_calibration(void)
 {
 	u8 param = 0x01;
-	u8 res = OK;
+	int res = OK;
 
 	logError(1, "%s %s Enter\n", tag, __func__);
 	res = production_test_initialization(SPECIAL_FULL_PANEL_INIT);
@@ -7980,9 +8047,10 @@ static ssize_t fts_selftest_write(struct file *file, const char __user *buf,
 				  size_t count, loff_t *pos)
 {
 	int retval = 0;
-	char tmp[6];
+	char tmp[6] = { 0 };
+	size_t n = min(count, sizeof(tmp) - 1);	/* "short"/"open"/"i2c" */
 
-	if (copy_from_user(tmp, buf, count)) {
+	if (copy_from_user(tmp, buf, n)) {
 		retval = -EFAULT;
 		goto out;
 	}
@@ -8192,10 +8260,7 @@ static void tpdbg_shutdown(struct fts_ts_info *info, bool sleep)
 
 static void tpdbg_suspend(struct fts_ts_info *info, bool enable)
 {
-	if (enable)
-		queue_work(info->event_wq, &info->suspend_work);
-	else
-		queue_work(info->event_wq, &info->resume_work);
+	fts_request_sleep(info, enable);
 }
 
 static int tpdbg_open(struct inode *inode, struct file *file)
@@ -8490,6 +8555,7 @@ static int fts_probe(struct spi_device *client)
 
 	INIT_WORK(&info->resume_work, fts_resume_work);
 	INIT_WORK(&info->suspend_work, fts_suspend_work);
+	INIT_WORK(&info->pm_work, fts_pm_work);
 	INIT_WORK(&info->sleep_work, fts_ts_sleep_work);
 	INIT_WORK(&info->mode_handler_work, fts_mode_handler_work);
 	init_completion(&info->tp_reset_completion);
@@ -8589,6 +8655,18 @@ static int fts_probe(struct spi_device *client)
 	mutex_init(&(info->input_report_mutex));
 #ifdef GESTURE_MODE
 	mutex_init(&gestureMask_mutex);
+#endif
+#ifdef FTS_FOD_AREA_REPORT
+	/*
+	 * fts_mode_handler() takes fod_mutex and fts_need_enter_lp_mode() reads
+	 * fod_status/fod_icon_status. Both are reachable as soon as
+	 * fts_init_sensing() (via fts_fw_update() below) runs and installs the
+	 * IRQ (ESD/watchdog/controller-ready handlers) and the display notifier
+	 * (pm_work), so set them up before that, once.
+	 */
+	mutex_init(&info->fod_mutex);
+	info->fod_status = -1;
+	info->fod_icon_status = 1;
 #endif
 
 	spin_lock_init(&fts_int);
@@ -8756,20 +8834,12 @@ static int fts_probe(struct spi_device *client)
 #else
 		info->fts_tp_class = class_create(THIS_MODULE, "touch");
 #endif
-	info->fts_touch_dev =
-	    device_create(info->fts_tp_class, NULL, DCHIP_ID_0, info, "tp_dev");
 
-	if (IS_ERR(info->fts_touch_dev)) {
-		logError(1,
-			 "%s ERROR: Failed to create device for the sysfs!\n",
-			 tag);
-		goto ProbeErrorExit_8;
-	}
-
-	dev_set_drvdata(info->fts_touch_dev, info);
-#ifdef FTS_FOD_AREA_REPORT
-	mutex_init(&(info->fod_mutex));
-#ifdef CONFIG_FACTORY_BUILD
+	/*
+	 * fod_mutex/fod_status/fod_icon_status, used by the tp_dev attributes,
+	 * were initialised before fts_init_sensing() (see above).
+	 */
+#if defined(FTS_FOD_AREA_REPORT) && defined(CONFIG_FACTORY_BUILD)
 	mutex_lock(&info->fod_mutex);
 	res = fts_write(gesture_cmd, ARRAY_SIZE(gesture_cmd));
 	if (res < OK)
@@ -8780,37 +8850,25 @@ static int fts_probe(struct spi_device *client)
 	fts_enableInterrupt();
 	info->fod_status = 1;
 	mutex_unlock(&info->fod_mutex);
-#else
-	info->fod_status = -1;
 #endif
-	info->fod_icon_status = 1;
-	error =
-	    sysfs_create_file(&info->fts_touch_dev->kobj,
-			      &dev_attr_fod_test.attr);
-	if (error) {
-		logError(1, "%s ERROR: Failed to create fod_test sysfs group!\n", tag);
+
+	/*
+	 * Create tp_dev with its attribute group (drvdata set before
+	 * device_add) so fod_status/double_tap exist when ueventd handles
+	 * KOBJ_ADD and applies their SELinux labels.
+	 */
+	info->fts_touch_dev =
+	    device_create_with_groups(info->fts_tp_class, NULL, DCHIP_ID_0,
+				      info, fts_tp_dev_groups, "tp_dev");
+
+	if (IS_ERR(info->fts_touch_dev)) {
+		error = PTR_ERR(info->fts_touch_dev);
+		logError(1,
+			 "%s ERROR: Failed to create device for the sysfs! %d\n",
+			 tag, error);
+		goto ProbeErrorExit_8;
 	}
-	error = 
-	    sysfs_create_file(&info->fts_touch_dev->kobj,
-			      &dev_attr_fod_status.attr);
-	if (error) {
-		logError(1, "%s ERROR: Failed to create fod_status sysfs group!\n", tag);
-	}
-#endif
-#ifdef GESTURE_MODE
-	error =
-	    sysfs_create_file(&info->fts_touch_dev->kobj,
-		&dev_attr_double_tap.attr);
-	if (error) {
-		logError(1, "%s ERROR: Failed to create double_tap sysfs group!\n", tag);
-	}
-#endif
-	error =
-	    sysfs_create_file(&info->fts_touch_dev->kobj,
-			      &dev_attr_ellipse_data.attr);
-	if (error) {
-		logError(1, "%s Error: Failed to create ellipse_data sysfs group!\n", tag);
-	}
+
 	info->tp_lockdown_info_proc =
 	    proc_create("tp_lockdown_info", 0444, NULL, &fts_lockdown_info_ops);
 	info->tp_data_dump_proc =
@@ -8898,9 +8956,17 @@ ProbeErrorExit_7:
 #endif
 ProbeErrorExit_6:
 	mi_disp_unregister_client(&info->notifier);
+	/* drain works queued by the notifier before tearing down the IRQ */
+	flush_workqueue(info->event_wq);
+	/* fts_init_sensing() may have installed the IRQ with info as dev_id */
+	if (info->event_dispatch_table) {
+		fts_interrupt_uninstall(info);
+		info->event_dispatch_table = NULL;
+	}
 	input_unregister_device(info->input_dev);
 #ifdef CONFIG_FTS_POWERSUPPLY_CB
 	power_supply_unreg_notifier(&info->power_supply_notifier);
+	cancel_delayed_work_sync(&info->power_supply_work);
 #endif
 
 ProbeErrorExit_5_1:
@@ -8926,6 +8992,7 @@ ProbeErrorExit_2:
 
 ProbeErrorExit_1:
 	kfree(info);
+	fts_info = NULL;
 
 ProbeErrorExit_0:
 	logError(1, "%s Probe Failed!\n", tag);

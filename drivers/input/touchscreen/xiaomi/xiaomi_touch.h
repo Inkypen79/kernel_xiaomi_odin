@@ -172,6 +172,8 @@ struct xiaomi_touch_pdata{
 	bool bump_sample_rate;
 	const char *name;
 	int fod_press_status_value;
+	/* last value written by the UDFPS long-press sensor HAL, state only */
+	int fod_longpress_gesture_enabled;
 	struct proc_dir_entry  *last_touch_events_proc;
 	struct last_touch_event *last_touch_events;
 };

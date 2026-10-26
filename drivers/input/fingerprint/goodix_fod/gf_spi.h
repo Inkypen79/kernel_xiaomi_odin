@@ -134,6 +134,7 @@ struct gf_dev {
 	signed pwr_gpio;
 	int irq;
 	int irq_enabled;
+	int irq_wake_enabled;
 	int clk_enabled;
 #ifdef GF_FASYNC
 	struct fasync_struct *async;

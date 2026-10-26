@@ -285,14 +285,16 @@ int readGestureCoords(u8 *event)
 
 	if (event[0] == EVT_ID_USER_REPORT && event[1] == EVT_TYPE_USER_GESTURE) {
 		address = (event[4] << 8) | event[3];
-		gesture_coords_reported = event[5];
-		if (gesture_coords_reported > GESTURE_MAX_COORDS_PAIRS_REPORT) {
+		/* clamp before publishing: sysfs readers sample this concurrently */
+		if (event[5] > GESTURE_MAX_COORDS_PAIRS_REPORT) {
 			logError(1,
 				 "%s %s:  FW reported more than %d points for the gestures! Decreasing to %d \n",
-				 tag, __func__, gesture_coords_reported,
+				 tag, __func__, event[5],
 				 GESTURE_MAX_COORDS_PAIRS_REPORT);
 			gesture_coords_reported =
 			    GESTURE_MAX_COORDS_PAIRS_REPORT;
+		} else {
+			gesture_coords_reported = event[5];
 		}
 
 		logError(1, "%s %s: Offset: %08X , coords pairs = %d\n", tag,
