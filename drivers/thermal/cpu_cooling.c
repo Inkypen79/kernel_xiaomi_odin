@@ -23,6 +23,8 @@
 
 #include <trace/events/thermal.h>
 
+#include "thermal_core.h"
+
 /*
  * Cooling state <-> CPUFreq frequency
  *
@@ -100,27 +102,51 @@ static LIST_HEAD(cpufreq_cdev_list);
 void cpu_limits_set_level(unsigned int cpu, unsigned int max_freq)
 {
 	struct cpufreq_cooling_device *cpufreq_cdev;
-	struct thermal_cooling_device *cdev;
-	unsigned int cdev_cpu;
-	unsigned int level;
+	struct thermal_cooling_device *cdev = NULL;
+	unsigned int level = 0;
+#ifdef CONFIG_QTI_THERMAL
+	struct thermal_instance *instance;
+#endif
 
+	mutex_lock(&cooling_list_lock);
 	list_for_each_entry(cpufreq_cdev, &cpufreq_cdev_list, node) {
-		sscanf(cpufreq_cdev->cdev->type, "thermal-cpufreq-%d", &cdev_cpu);
-		if (cdev_cpu == cpu) {
-			for (level = 0; level <= cpufreq_cdev->max_level; level++) {
-				int target_freq = cpufreq_cdev->freq_table[level].frequency;
-				if (max_freq >= target_freq) {
-					cdev = cpufreq_cdev->cdev;
-					if (cdev)
-						cdev->ops->set_cur_state(cdev, level);
-
-					break;
-				}
-			}
-
-			break;
-		}
+		/* cdev id (and "thermal-cpufreq-%d" name) is policy->cpu */
+		if (cpufreq_cdev->id != cpu)
+			continue;
+		/*
+		 * Highest freq <= max_freq. Like stock, ignore requests below
+		 * the lowest freq instead of clamping to it.
+		 */
+		while (level <= cpufreq_cdev->max_level &&
+		       cpufreq_cdev->freq_table[level].frequency > max_freq)
+			level++;
+		if (level <= cpufreq_cdev->max_level)
+			cdev = cpufreq_cdev->cdev;
+		break;
 	}
+	mutex_unlock(&cooling_list_lock);
+
+	if (!cdev)
+		return;
+
+#ifdef CONFIG_QTI_THERMAL
+	/*
+	 * Vote through the userspace instance (always the first entry, added
+	 * at cdev registration; zone bindings are added at the tail), like
+	 * cur_state_store(), so kernel trips and this limit are aggregated.
+	 */
+	mutex_lock(&cdev->lock);
+	instance = list_first_entry(&cdev->thermal_instances,
+				    typeof(*instance), cdev_node);
+	instance->target = level;
+	cdev->updated = false;
+	mutex_unlock(&cdev->lock);
+	thermal_cdev_update(cdev);
+#else
+	mutex_lock(&cdev->lock);
+	cdev->ops->set_cur_state(cdev, level);
+	mutex_unlock(&cdev->lock);
+#endif
 }
 
 /* Below code defines functions to be used for cpufreq as cooling device */
@@ -358,12 +384,19 @@ static int cpufreq_set_cur_state(struct thermal_cooling_device *cdev,
 	if (cpufreq_cdev->cpufreq_state == state)
 		return 0;
 
+	/*
+	 * 0 means the request was stored but another max limit still
+	 * dominates. Record the state anyway, or a later return to the old
+	 * state would hit the check above and leave this request in place.
+	 */
 	ret = freq_qos_update_request(&cpufreq_cdev->qos_req,
 			cpufreq_cdev->freq_table[state].frequency);
-	if (ret > 0)
-		cpufreq_cdev->cpufreq_state = state;
+	if (ret < 0)
+		return ret;
 
-	return ret;
+	cpufreq_cdev->cpufreq_state = state;
+
+	return 0;
 }
 
 /**

@@ -134,15 +134,18 @@ int battery_chg_write(struct battery_chg_dev *bcdev, void *data,
 		return 0;
 
 	mutex_lock(&bcdev->rw_lock);
+	/* Teardown clears this under rw_lock before the client is freed */
+	if (!bcdev->initialized) {
+		mutex_unlock(&bcdev->rw_lock);
+		return -ENODEV;
+	}
 	reinit_completion(&bcdev->ack);
 	rc = pmic_glink_write(bcdev->client, data, len);
 	if (!rc) {
 		rc = wait_for_completion_timeout(&bcdev->ack,
 					msecs_to_jiffies(BC_WAIT_TIME_MS));
-		if (!rc) {
+		if (!rc)
 			pr_err("Error, timed out sending message\n");
-			mutex_unlock(&bcdev->rw_lock);
-		}
 
 		rc = 0;
 	}
@@ -227,6 +230,10 @@ static void battery_chg_state_cb(void *priv, enum pmic_glink_state state)
 	pr_debug("state: %d\n", state);
 
 	atomic_set(&bcdev->state, state);
+	/* Don't queue work during teardown (failed probe or remove) */
+	if (!bcdev->initialized)
+		return;
+
 	if (state == PMIC_GLINK_STATE_UP)
 		schedule_work(&bcdev->subsys_up_work);
 }
@@ -471,7 +478,8 @@ static void handle_message(struct battery_chg_dev *bcdev, void *data,
 		break;
 	}
 
-	if (ack_set)
+	/* Ack error responses too, so the waiter doesn't sit out the timeout */
+	if (ack_set || (len == sizeof(*resp_msg) && resp_msg->ret_code))
 		complete(&bcdev->ack);
 }
 
@@ -1166,6 +1174,7 @@ static int power_supply_read_temp(struct thermal_zone_device *tzd,
 	ktime_t time_now;
 	static ktime_t last_read_time;
 	s64 delta;
+	u32 real_type;
 
 	WARN_ON(tzd == NULL);
 	psy = tzd->devdata;
@@ -1184,8 +1193,11 @@ static int power_supply_read_temp(struct thermal_zone_device *tzd,
 	}
 
 	*temp = batt_temp * 1000;
+	real_type = READ_ONCE(pst->prop[XM_PROP_REAL_TYPE]);
 	pr_err("batt_thermal temp:%d ,delta:%ld blank_state=%d chg_type=%s tl:=%d  ffc:=%d, pd_verifed:=%d\n",
-		batt_temp,delta, bcdev->blank_state, power_supply_usb_type_text[pst->prop[XM_PROP_REAL_TYPE]],
+		batt_temp,delta, bcdev->blank_state,
+		real_type < ARRAY_SIZE(power_supply_usb_type_text) ?
+			power_supply_usb_type_text[real_type] : "Unknown",
 		bcdev->curr_thermal_level, pst->prop[XM_PROP_FASTCHGMODE], pst->prop[XM_PROP_PD_VERIFED]);
 	return 0;
 }
@@ -1236,6 +1248,22 @@ static int battery_chg_init_psy(struct battery_chg_dev *bcdev)
 	return 0;
 }
 
+static void battery_chg_unregister_tzd(struct battery_chg_dev *bcdev)
+{
+#if defined(CONFIG_BQ_FUEL_GAUGE)
+	struct power_supply *psy = bcdev->psy_list[PSY_TYPE_BATTERY].psy;
+
+	/*
+	 * get_temp uses bcdev->client, so drop the zone before the client
+	 * goes away. Clear tzd so power_supply_unregister() won't free it again.
+	 */
+	if (!IS_ERR_OR_NULL(psy) && !IS_ERR_OR_NULL(psy->tzd)) {
+		thermal_zone_device_unregister(psy->tzd);
+		psy->tzd = NULL;
+	}
+#endif
+}
+
 static void battery_chg_subsys_up_work(struct work_struct *work)
 {
 	struct battery_chg_dev *bcdev = container_of(work,
@@ -1266,6 +1294,36 @@ static void battery_chg_subsys_up_work(struct work_struct *work)
 			pr_err("Failed to set ICL(%u uA), rc=%d\n",
 				bcdev->usb_icl_ua, rc);
 	}
+
+	/*
+	 * The restarted ADSP is back at level 0 (no mitigation), but the
+	 * set paths skip unchanged levels, so re-push any active level here.
+	 * Do it after the last_fcc_ua restore: BATT_CHG_CTRL_LIM also takes
+	 * uA. The levels were range-checked when stored and start at 0.
+	 */
+	if (bcdev->curr_thermal_level > 0) {
+		rc = write_property_id(bcdev,
+				&bcdev->psy_list[PSY_TYPE_BATTERY],
+				BATT_CHG_CTRL_LIM, bcdev->curr_thermal_level);
+		if (rc < 0)
+			pr_err("Failed to restore thermal level %d, rc=%d\n",
+				bcdev->curr_thermal_level, rc);
+	}
+
+	if (bcdev->support_wireless_charge && bcdev->curr_wlsthermal_level > 0) {
+		rc = write_property_id(bcdev, &bcdev->psy_list[PSY_TYPE_XM],
+				XM_PROP_WLSCHARGE_CONTROL_LIMIT,
+				bcdev->curr_wlsthermal_level);
+		if (rc < 0)
+			pr_err("Failed to restore wls thermal level %d, rc=%d\n",
+				bcdev->curr_wlsthermal_level, rc);
+	}
+
+	/*
+	 * The restarted firmware has also lost the display state; re-send
+	 * it. Teardown cancels this work before fb_notifier_work.
+	 */
+	schedule_work(&bcdev->fb_notifier_work);
 }
 
 static int wireless_fw_send_firmware(struct battery_chg_dev *bcdev,
@@ -2036,7 +2094,6 @@ static int fb_notifier_callback(struct notifier_block *nb,
 						     fb_notifier);
 	struct mi_disp_notifier *evdata = data;
 	unsigned int blank;
-	int rc;
 
 	if(val != MI_DISP_DPMS_EVENT)
 		return NOTIFY_OK;
@@ -2052,16 +2109,47 @@ static int fb_notifier_callback(struct notifier_block *nb,
 			bcdev->blank_state = FB_UNBLANK;
 		}
 
-		rc = write_property_id(bcdev, &bcdev->psy_list[PSY_TYPE_XM],
-				XM_PROP_FB_BLANK_STATE, bcdev->blank_state);
-		if (rc < 0)
-			return rc;
+		schedule_work(&bcdev->fb_notifier_work);
 	}
 	return NOTIFY_OK;
 }
 
 extern void generate_xm_charge_uvent(struct work_struct *work);
 extern void xm_charger_debug_info_print_work(struct work_struct *work);
+
+/*
+ * Teardown (failed probe or remove), after the display and reboot notifiers
+ * are gone. Clearing initialized under rw_lock waits out any in-flight
+ * battery_chg_write() and makes later ones bail before touching the client.
+ * It also stops the glink callbacks from queueing work. The works use the
+ * client, so flush them before it is freed.
+ */
+static void battery_chg_quiesce(struct battery_chg_dev *bcdev)
+{
+	mutex_lock(&bcdev->rw_lock);
+	bcdev->initialized = false;
+	mutex_unlock(&bcdev->rw_lock);
+
+	/* subsys_up_work queues fb_notifier_work, so cancel it first */
+	cancel_work_sync(&bcdev->subsys_up_work);
+	cancel_work_sync(&bcdev->fb_notifier_work);
+	cancel_delayed_work_sync(&bcdev->xm_prop_change_work);
+	cancel_delayed_work_sync(&bcdev->charger_debug_info_print_work);
+	cancel_work_sync(&bcdev->usb_type_work);
+}
+
+/*
+ * A state callback that read initialized just before it was cleared may
+ * still have queued subsys_up_work. pmic_glink_unregister_client() takes
+ * the lock the callbacks run under, so once it returns no more can be
+ * queued. Flush them before bcdev is freed; battery_chg_write() bails, so
+ * they never touch the freed client.
+ */
+static void battery_chg_flush_late_work(struct battery_chg_dev *bcdev)
+{
+	cancel_work_sync(&bcdev->subsys_up_work);
+	cancel_work_sync(&bcdev->fb_notifier_work);
+}
 
 static int battery_chg_probe(struct platform_device *pdev)
 {
@@ -2125,6 +2213,8 @@ static int battery_chg_probe(struct platform_device *pdev)
 	INIT_WORK(&bcdev->subsys_up_work, battery_chg_subsys_up_work);
 	INIT_WORK(&bcdev->usb_type_work, battery_chg_update_usb_type_work);
 	INIT_WORK(&bcdev->fb_notifier_work, battery_chg_fb_notifier_work);
+	INIT_DELAYED_WORK( &bcdev->xm_prop_change_work, generate_xm_charge_uvent);
+	INIT_DELAYED_WORK( &bcdev->charger_debug_info_print_work, xm_charger_debug_info_print_work);
 
 	atomic_set(&bcdev->state, PMIC_GLINK_STATE_UP);
 	bcdev->dev = dev;
@@ -2191,8 +2281,6 @@ static int battery_chg_probe(struct platform_device *pdev)
 	device_init_wakeup(bcdev->dev, true);
 	schedule_work(&bcdev->usb_type_work);
 
-	INIT_DELAYED_WORK( &bcdev->xm_prop_change_work, generate_xm_charge_uvent);
-	INIT_DELAYED_WORK( &bcdev->charger_debug_info_print_work, xm_charger_debug_info_print_work);
 	schedule_delayed_work(&bcdev->charger_debug_info_print_work, 5 * HZ);
 
 	bcdev->slave_fg_verify_flag = false;
@@ -2207,13 +2295,16 @@ static int battery_chg_probe(struct platform_device *pdev)
 	dev_err(dev, "battery_chg_probe done\n");
 	return 0;
 error:
-	bcdev->initialized = false;
 	complete(&bcdev->ack);
-	pmic_glink_unregister_client(bcdev->client);
 #if !defined(CONFIG_RENOIR_FOR_BUILD)
 	mi_disp_unregister_client(&bcdev->fb_notifier);
 #endif
 	unregister_reboot_notifier(&bcdev->reboot_notifier);
+	unregister_reboot_notifier(&bcdev->shutdown_notifier);
+	battery_chg_quiesce(bcdev);
+	battery_chg_unregister_tzd(bcdev);
+	pmic_glink_unregister_client(bcdev->client);
+	battery_chg_flush_late_work(bcdev);
 	return rc;
 }
 
@@ -2229,7 +2320,11 @@ static int battery_chg_remove(struct platform_device *pdev)
 	mi_disp_unregister_client(&bcdev->fb_notifier);
 #endif
 	unregister_reboot_notifier(&bcdev->reboot_notifier);
+	unregister_reboot_notifier(&bcdev->shutdown_notifier);
+	battery_chg_quiesce(bcdev);
+	battery_chg_unregister_tzd(bcdev);
 	rc = pmic_glink_unregister_client(bcdev->client);
+	battery_chg_flush_late_work(bcdev);
 	if (rc < 0) {
 		pr_err("Error unregistering from pmic_glink, rc=%d\n", rc);
 		return rc;
