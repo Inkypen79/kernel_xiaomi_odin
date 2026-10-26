@@ -41,6 +41,7 @@
 #define NCI_HDR_LEN				3
 #define NCI_PAYLOAD_IDX			3
 #define NCI_PAYLOAD_LEN_IDX		2
+#define NCI_STATUS_OK			0x00
 
 #define NCI_RESET_CMD_LEN			(4)
 #define NCI_RESET_RSP_LEN			(4)
@@ -86,6 +87,32 @@
 #define ESE_SET_PWR		_IOW(NFC_MAGIC, 0x02, unsigned int)
 #define ESE_GET_PWR		_IOR(NFC_MAGIC, 0x03, unsigned int)
 #define NFC_GET_PLATFORM_TYPE	_IO(NFC_MAGIC, 0x04)
+/*
+ * NXP SNxxx HAL (NfccI2cTransport) contract. NFC_SET_RESET_READ_PENDING
+ * shares nr 0x04 with NFC_GET_PLATFORM_TYPE but has a size/direction, so
+ * the full numbers differ: 0x4004E904 vs 0x0000E904.
+ */
+#define NFC_SET_RESET_READ_PENDING	_IOW(NFC_MAGIC, 0x04, uint32_t)
+#define NFC_GET_GPIO_STATUS		_IOR(NFC_MAGIC, 0x05, uint32_t)
+
+/* NFC_SET_RESET_READ_PENDING arg (HAL NfcReadPending) */
+enum nfc_read_pending {
+	NFC_RESET_READ_PENDING = 0,
+	NFC_SET_READ_PENDING,
+};
+
+/*
+ * NFC_GET_GPIO_STATUS result: three signed 2-bit fields, as decoded by
+ * phNxpNciHal_decodeGpioStatus(): irq [1:0], ven [3:2], fw_dwl [5:4];
+ * -1 means the GPIO is not present.
+ */
+#define NFC_GPIO_STATUS_IRQ_SHIFT	0
+#define NFC_GPIO_STATUS_VEN_SHIFT	2
+#define NFC_GPIO_STATUS_DWL_SHIFT	4
+#define NFC_GPIO_STATUS_FIELD_MASK	0x3
+
+/* eSE cold reset response wait when the NFC reader thread owns reads */
+#define COLD_RESET_RSP_WAIT_TIME	(2000)
 
 #define DTS_IRQ_GPIO_STR	"qcom,sn-irq"
 #define DTS_VEN_GPIO_STR	"qcom,sn-ven"
@@ -204,9 +231,20 @@ struct platform_ldo {
 //Features specific Parameters
 struct cold_reset {
 	wait_queue_head_t read_wq;
+	/*
+	 * Protects rsp_pending, status and is_nfc_enabled, so the eSE cold
+	 * reset ioctl and the NFC reader agree on who consumes the response.
+	 * Lock order: read_mutex -> lock.
+	 */
+	struct mutex lock;
 	bool rsp_pending;
-	uint8_t status;
-	/* Is NFC enabled from UI */
+	/* NCI status byte of the cold reset response, or -errno */
+	int status;
+	/*
+	 * Is NFC enabled from UI, i.e. the NFC HAL reader thread has a read
+	 * pending and picks up the cold reset response. Set by NFC_SET_PWR
+	 * NFC_ENABLE/NFC_DISABLE (older HALs) or NFC_SET_RESET_READ_PENDING.
+	 */
 	bool is_nfc_enabled;
 };
 
@@ -262,6 +300,8 @@ int nfc_misc_probe(struct nfc_dev *nfc_dev,
 void nfc_misc_remove(struct nfc_dev *nfc_dev, int count);
 int configure_gpio(unsigned int gpio, int flag);
 void read_cold_reset_rsp(struct nfc_dev *nfc_dev, char *header);
+bool nfc_cold_reset_rsp_claim(struct nfc_dev *nfc_dev, char *header,
+			      size_t len);
 void gpio_set_ven(struct nfc_dev *nfc_dev, int value);
 int nfcc_hw_check(struct nfc_dev *nfc_dev);
 int nfc_ldo_config(struct device *dev, struct nfc_dev *nfc_dev);
