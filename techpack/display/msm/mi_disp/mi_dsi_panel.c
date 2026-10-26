@@ -2248,7 +2248,7 @@ static int mi_dsi_update_lhbm_110nit_D0reg(struct dsi_panel *panel, enum dsi_cmd
 
 	cmds = priv_info->cmd_sets[type].cmds;
 	count = priv_info->cmd_sets[type].count;
-	if (cmds && count >= index) {
+	if (cmds && count > index) {
 		tx_buf = (u8 *)cmds[index].msg.tx_buf;
 		if (tx_buf && tx_buf[0] == 0xD0) {
 			if (mi_cfg->gir_enabled) {
@@ -2334,7 +2334,7 @@ static int mi_dsi_update_lhbm_cmd_87reg(struct dsi_panel *panel,
 	/* update lhbm aa area alpha */
 	cmds = priv_info->cmd_sets[type].cmds;
 	count = priv_info->cmd_sets[type].count;
-	if (cmds && count >= index) {
+	if (cmds && count > index) {
 		tx_buf = (u8 *)cmds[index].msg.tx_buf;
 		if (tx_buf && tx_buf[0] == 0x87) {
 			if(mi_cfg->panel_id == 0x4C3900420200) {
@@ -2411,7 +2411,7 @@ static int mi_dsi_update_hbm_cmd_87reg(struct dsi_panel *panel,
 	/* update lhbm aa area alpha */
 	cmds = priv_info->cmd_sets[type].cmds;
 	count = priv_info->cmd_sets[type].count;
-	if (cmds && count >= index) {
+	if (cmds && count > index) {
 		tx_buf = (u8 *)cmds[index].msg.tx_buf;
 		if (tx_buf && tx_buf[0] == 0x87) {
 			tx_buf[1] = (aa_alpha_set[bl_lvl] >> 8) & 0x0f;
@@ -2605,7 +2605,7 @@ static int mi_dsi_update_hbm_cmd_51reg(struct dsi_panel *panel,
 	/* restore last backlight value when hbm off */
 	cmds = priv_info->cmd_sets[type].cmds;
 	count = priv_info->cmd_sets[type].count;
-	if (cmds && count >= index) {
+	if (cmds && count > index) {
 		tx_buf = (u8 *)cmds[index].msg.tx_buf;
 		if (tx_buf && tx_buf[0] == 0x51) {
 			tx_buf[1] = (bl_lvl >> 8) & 0x0f;
@@ -2638,6 +2638,39 @@ bool mi_dsi_panel_is_need_tx_cmd(u32 feature_id)
 		return false;
 	default:
 		return true;
+	}
+}
+
+#define MI_K8_PANEL_ID			0x4B3800420200
+#define MI_K8_LHBM_OFF_MAX_RETRY	2
+
+/*
+ * K8 (odin) panel: the LHBM-off command does not always take effect and the
+ * white circle can stay lit. Like the official driver, read 0x87 back and
+ * resend DSI_CMD_SET_MI_LOCAL_HBM_OFF_TO_NORMAL if byte[2] is not 0x04
+ * (LHBM off). The 0x51 value was already patched into the command set by
+ * the caller, so a resend carries the same backlight level.
+ * Called with panel_lock held and the panel initialized.
+ */
+static void mi_dsi_k8_lhbm_off_verify(struct dsi_panel *panel)
+{
+	u8 read_buf[4];
+	ssize_t read_len;
+	int retry;
+
+	if (panel->mi_cfg.panel_id != MI_K8_PANEL_ID)
+		return;
+
+	for (retry = 0; retry < MI_K8_LHBM_OFF_MAX_RETRY; retry++) {
+		memset(read_buf, 0, sizeof(read_buf));
+		read_len = mipi_dsi_dcs_read(&panel->mipi_device, 0x87,
+				read_buf, sizeof(read_buf));
+		if (read_len == sizeof(read_buf) && read_buf[2] == 0x04)
+			return;
+
+		DISP_INFO("k8_local_hbm, 0x87 reg value not 0x04, read_buf[2]: 0x%02x (len %zd), resend\n",
+			read_buf[2], read_len);
+		dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_MI_LOCAL_HBM_OFF_TO_NORMAL);
 	}
 }
 
@@ -2763,11 +2796,13 @@ int mi_dsi_panel_set_disp_param(struct dsi_panel *panel, struct disp_feature_ctl
 				mi_cfg->doze_brightness_backup = DOZE_BRIGHTNESS_HBM;
 				mi_dsi_update_hbm_cmd_51reg(panel, DSI_CMD_SET_MI_DOZE_HBM, mi_cfg->doze_hbm_dbv_level);
 				dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_MI_DOZE_HBM);
+				mi_dsi_update_micfg_flags(panel, PANEL_DOZE_HIGH);
 			} else {
 				mi_cfg->doze_brightness = DOZE_BRIGHTNESS_LBM;
 				mi_cfg->doze_brightness_backup = DOZE_BRIGHTNESS_LBM;
 				mi_dsi_update_hbm_cmd_51reg(panel, DSI_CMD_SET_MI_DOZE_LBM, mi_cfg->doze_lbm_dbv_level);
 				dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_MI_DOZE_LBM);
+				mi_dsi_update_micfg_flags(panel, PANEL_DOZE_LOW);
 			}
 			mi_cfg->dimming_state = STATE_DIM_BLOCK;
 		} else {
@@ -2859,7 +2894,9 @@ int mi_dsi_panel_set_disp_param(struct dsi_panel *panel, struct disp_feature_ctl
 				DISP_INFO("LOCAL_HBM_OFF_TO_HBM\n");
 				mi_dsi_update_hbm_cmd_51reg(panel, DSI_CMD_SET_MI_LOCAL_HBM_OFF_TO_HBM, panel->mi_cfg.last_bl_level);
 				dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_MI_LOCAL_HBM_OFF_TO_HBM);
-				mi_dsi_update_micfg_flags(panel, PANEL_NOLP);
+				/* this cmd does not exit AOD, keep doze state so nolp is sent */
+				if (!is_aod_and_panel_initialized(panel))
+					mi_dsi_update_micfg_flags(panel, PANEL_NOLP);
 				mi_cfg->dimming_state = STATE_DIM_BLOCK;
 				mi_cfg->doze_brightness_backup = DOZE_TO_NORMAL;
 				mi_cfg->local_hbm_to_normal = true;
@@ -2869,7 +2906,10 @@ int mi_dsi_panel_set_disp_param(struct dsi_panel *panel, struct disp_feature_ctl
 				if (mi_cfg->panel_id == 0x4C3900360200)
 					mi_dsi_update_lhbm_dc_gain(panel,DSI_CMD_SET_MI_LOCAL_HBM_OFF_TO_NORMAL);
 				dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_MI_LOCAL_HBM_OFF_TO_NORMAL);
-				mi_dsi_update_micfg_flags(panel, PANEL_NOLP);
+				mi_dsi_k8_lhbm_off_verify(panel);
+				/* this cmd does not exit AOD, keep doze state so nolp is sent */
+				if (!is_aod_and_panel_initialized(panel))
+					mi_dsi_update_micfg_flags(panel, PANEL_NOLP);
 				mi_cfg->doze_brightness_backup = DOZE_TO_NORMAL;
 				mi_cfg->local_hbm_to_normal = true;
 			}
@@ -2908,15 +2948,18 @@ int mi_dsi_panel_set_disp_param(struct dsi_panel *panel, struct disp_feature_ctl
 		case LOCAL_HBM_OFF_TO_NORMAL_BACKLIGHT_RESTORE:
 			DISP_INFO("LOCAL_HBM_OFF_TO_NORMAL_BACKLIGHT_RESTORE\n");
 
-			if (mi_cfg->panel_id == 0x4B3800420200 || mi_cfg->panel_id == 0x4B394200420200 || mi_cfg->panel_id == 0x4B394500420200 || mi_cfg->panel_id == 0x4B394500350200)
+			if (mi_cfg->panel_id == 0x4B3800420200 || mi_cfg->panel_id == 0x4B394200420200 || mi_cfg->panel_id == 0x4B394500420200 || mi_cfg->panel_id == 0x4B394500350200) {
 				mi_dsi_update_hbm_cmd_51reg(panel, DSI_CMD_SET_MI_LOCAL_HBM_OFF_TO_NORMAL, 0);
-			else if(mi_cfg->panel_id == 0x4C3900420200 || mi_cfg->panel_id == 0x4C3900360200)
+				/* backlight goes to 0 here, re-apply cached level on LP->ON */
+				mi_cfg->bl_need_update = true;
+			} else if(mi_cfg->panel_id == 0x4C3900420200 || mi_cfg->panel_id == 0x4C3900360200)
 				mi_dsi_update_hbm_cmd_51reg(panel, DSI_CMD_SET_MI_LOCAL_HBM_OFF_TO_NORMAL, 0);
 			else
 				mi_dsi_update_backlight_in_aod(panel, true);
 			if (mi_cfg->panel_id == 0x4C3900360200)
 				mi_dsi_update_lhbm_dc_gain(panel,DSI_CMD_SET_MI_LOCAL_HBM_OFF_TO_NORMAL);
 			dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_MI_LOCAL_HBM_OFF_TO_NORMAL);
+			mi_dsi_k8_lhbm_off_verify(panel);
 			mi_dsi_update_micfg_flags(panel, PANEL_NOLP);
 			mi_cfg->doze_brightness_backup = DOZE_TO_NORMAL;
 			mi_cfg->local_hbm_to_normal = true;
@@ -3316,6 +3359,7 @@ int mi_dsi_panel_set_disp_param(struct dsi_panel *panel, struct disp_feature_ctl
 		else
 			dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_MI_COLOR_INVERT_OFF);
 		mi_cfg->feature_val[DISP_FEATURE_COLOR_INVERT] = ctl->feature_val;
+		break;
 	case DISP_FEATURE_DC_BACKLIGHT:
 		DISP_INFO("DC backlight:%d\n", ctl->feature_val);
 		mi_dsi_update_dc_backlight(panel, ctl->feature_val);
@@ -3588,6 +3632,7 @@ static void mi_disp_set_fod_work_handler(struct kthread_work *work)
 	}
 
 	if (fod_data->from_touch) {
+again:
 		atomic_set(&fod_work_status, FOD_WORK_DOING);
 		do {
 			DISP_DEBUG("from touch, current(%d),last(%d)\n",
@@ -3611,6 +3656,14 @@ static void mi_disp_set_fod_work_handler(struct kthread_work *work)
 			}
 		} while (atomic_read(&touch_current_status) != atomic_read(&touch_last_status));
 		atomic_set(&fod_work_status, FOD_WORK_DONE);
+		/*
+		 * Pairs with smp_mb() in mi_disp_set_fod_queue_work(): a producer
+		 * that saw DOING after we left the loop has already published
+		 * touch_last_status, so pick it up here instead of losing it.
+		 */
+		smp_mb();
+		if (atomic_read(&touch_current_status) != atomic_read(&touch_last_status))
+			goto again;
 	} else {
 		DISP_DEBUG("not from touch, fod_btn(%d)\n", fod_data->fod_btn);
 		if (fod_data->fod_btn == 0) {
@@ -3658,10 +3711,16 @@ int mi_disp_set_fod_queue_work(u32 fod_btn, bool from_touch)
 	fp_state = mi_cfg->feature_val[DISP_FEATURE_FP_STATUS];
 
 	if (from_touch) {
+		/*
+		 * Publish the new state before testing the work status. Pairs
+		 * with smp_mb() in mi_disp_set_fod_work_handler(): either the
+		 * running work sees this update or we see DONE and queue work.
+		 */
+		atomic_set(&touch_last_status, fod_btn);
+		smp_mb();
 		if (atomic_read(&fod_work_status) == FOD_WORK_DOING) {
 			DISP_DEBUG("work doing: from touch current(%d), new fod_btn(%d), skip\n",
 				atomic_read(&touch_current_status), fod_btn);
-				atomic_set(&touch_last_status, fod_btn);
 			return 0;
 		} else {
 /*			if (ignore_fod_btn) {
@@ -3688,7 +3747,6 @@ int mi_disp_set_fod_queue_work(u32 fod_btn, bool from_touch)
 				}
 				mutex_unlock(&display->display_lock);
 */
-				atomic_set(&touch_last_status, fod_btn);
 				DISP_DEBUG("from touch fod_btn=%d\n", fod_btn);
 			}
 		}

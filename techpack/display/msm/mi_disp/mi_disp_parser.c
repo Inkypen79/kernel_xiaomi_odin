@@ -483,7 +483,8 @@ int mi_dsi_panel_parse_config(struct dsi_panel *panel)
 			demura_ptr = qcom_smem_get(QCOM_SMEM_HOST_ANY, SMEM_SW_DISPLAY_DEMURA_TABLE, &item_size);
 			if (!IS_ERR(demura_ptr) && item_size > 0) {
 				DSI_INFO("demura data size %d\n", item_size);
-				memcpy(mi_cfg->demura_data, demura_ptr, item_size);
+				memcpy(mi_cfg->demura_data, demura_ptr,
+					min_t(size_t, item_size, sizeof(mi_cfg->demura_data)));
 			}
 		}
 		if (mi_cfg->panel_id == 0x4B394200420200 || mi_cfg->panel_id == 0x4B394500350200 || mi_cfg->panel_id == 0x4B394500420200) {

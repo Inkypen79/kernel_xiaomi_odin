@@ -658,6 +658,8 @@ int dsi_panel_set_backlight(struct dsi_panel *panel, u32 bl_lvl)
 
 	if (is_backlight_set_skip(panel, bl_lvl)) {
 		mi_dsi_panel_update_last_bl_level(panel, bl_lvl);
+		/* write was swallowed, re-apply it on the next LP->ON */
+		panel->mi_cfg.bl_need_update = true;
 		return 0;
 	} else if (panel->mi_cfg.aod_bl_51ctl && panel->power_mode == SDE_MODE_DPMS_LP1) {
 		DSI_INFO("%s panel skip set backlight %d due to "
@@ -4642,7 +4644,8 @@ int dsi_panel_set_nolp(struct dsi_panel *panel)
 		goto exit1;
 	}
 
-	if (panel->mi_cfg.panel_state == PANEL_STATE_ON && !panel->mi_cfg.aod_bl_51ctl) {
+	if (panel->mi_cfg.panel_state == PANEL_STATE_ON && !panel->mi_cfg.aod_bl_51ctl &&
+		panel->mi_cfg.doze_brightness == DOZE_TO_NORMAL) {
 		DSI_INFO("panel already PANEL_STATE_ON, skip nolp\n");
 		goto exit1;
 	}

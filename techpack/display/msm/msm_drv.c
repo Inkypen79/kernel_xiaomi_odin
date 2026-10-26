@@ -1233,6 +1233,9 @@ static void msm_lastclose(struct drm_device *dev)
 			DRM_INFO("wait for crtc mask 0x%x failed, commit anyway...\n",
 				priv->pending_crtcs);
 
+		if (!kms->funcs->trigger_null_flush)
+			return;
+
 		rc = kms->funcs->trigger_null_flush(kms);
 		if (rc)
 			return;

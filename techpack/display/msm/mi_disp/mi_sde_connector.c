@@ -409,8 +409,6 @@ int mi_sde_connector_dc_fence(struct drm_connector *connector)
 	}
 	mutex_unlock(&dsi_display->panel->panel_lock);
 
-	mutex_unlock(&dsi_display->panel->panel_lock);
-
 	return rc;
 }
 

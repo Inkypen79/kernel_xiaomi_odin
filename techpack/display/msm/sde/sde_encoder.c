@@ -2332,7 +2332,7 @@ static void sde_encoder_virt_mode_set(struct drm_encoder *drm_enc,
 	if (ret) {
 		SDE_ERROR_ENC(sde_enc,
 				"failed to reserve hw resources, %d\n", ret);
-		return;
+		goto post_modeset;
 	}
 
 	/* assign the reserved HW blocks to this encoder */
@@ -2354,7 +2354,7 @@ static void sde_encoder_virt_mode_set(struct drm_encoder *drm_enc,
 				sde_enc->topology.num_intf) {
 				SDE_ERROR_ENC(sde_enc, "invalid hw_pp[%d]\n",
 						i * num_pp_per_intf);
-				return;
+				goto post_modeset;
 			}
 			phys->hw_pp = sde_enc->hw_pp[i * num_pp_per_intf];
 			phys->connector = conn->state->connector;
@@ -2363,6 +2363,7 @@ static void sde_encoder_virt_mode_set(struct drm_encoder *drm_enc,
 		}
 	}
 
+post_modeset:
 	/* update resources after seamless mode change */
 	sde_encoder_virt_modeset_rc(drm_enc, adj_mode, false);
 }
@@ -2741,6 +2742,9 @@ static void sde_encoder_virt_enable(struct drm_encoder *drm_enc)
 				ret);
 		return;
 	}
+
+	/* turn off vsync_in to update tear check configuration */
+	sde_encoder_control_te(drm_enc, false);
 
 	memset(&sde_enc->cur_master->intf_cfg_v1, 0,
 			sizeof(sde_enc->cur_master->intf_cfg_v1));
