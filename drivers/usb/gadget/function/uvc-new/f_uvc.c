@@ -407,7 +407,13 @@ uvc_function_connect(struct uvc_device *uvc)
 void
 uvc_function_disconnect(struct uvc_device *uvc)
 {
+	struct usb_composite_dev *cdev = uvc->func.config ?
+					 uvc->func.config->cdev : NULL;
 	int ret;
+
+	/* The gadget is gone if the function was unbound before release. */
+	if (!cdev || !cdev->gadget)
+		return;
 
 	if ((ret = usb_function_deactivate(&uvc->func)) < 0)
 		uvcg_info(&uvc->func, "UVC disconnect failed with %d\n", ret);
@@ -934,9 +940,6 @@ static void uvc_function_unbind(struct usb_configuration *c,
 
 	uvcg_info(f, "%s()\n", __func__);
 
-	if (video->async_wq)
-		destroy_workqueue(video->async_wq);
-
 	/*
 	 * If we know we're connected via v4l2, then there should be a cleanup
 	 * of the device from userspace either via UVC_EVENT_DISCONNECT or
@@ -965,6 +968,18 @@ static void uvc_function_unbind(struct usb_configuration *c,
 				uvc->func_connected == false, msecs_to_jiffies(1000));
 		uvcg_dbg(f, "done waiting for release with ret: %ld\n", wait_ret);
 	}
+
+	/*
+	 * Destroy the work queue only once the video device is gone, and under
+	 * the video mutex so that a racing ioctl sees either a live queue or
+	 * NULL.
+	 */
+	mutex_lock(&video->mutex);
+	if (video->async_wq) {
+		destroy_workqueue(video->async_wq);
+		video->async_wq = NULL;
+	}
+	mutex_unlock(&video->mutex);
 
 	usb_ep_free_request(cdev->gadget->ep0, uvc->control_req);
 	kfree(uvc->control_buf);

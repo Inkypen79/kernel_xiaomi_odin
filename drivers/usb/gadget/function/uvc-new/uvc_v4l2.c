@@ -425,7 +425,7 @@ uvc_v4l2_qbuf(struct file *file, void *fh, struct v4l2_buffer *b)
 	if (ret < 0)
 		return ret;
 
-	if (uvc->state == UVC_STATE_STREAMING)
+	if (uvc->state == UVC_STATE_STREAMING && video->async_wq)
 		queue_work(video->async_wq, &video->pump);
 
 	return ret;
@@ -516,8 +516,13 @@ uvc_v4l2_subscribe_event(struct v4l2_fh *fh,
 
 static void uvc_v4l2_disable(struct uvc_device *uvc)
 {
-	uvc_function_disconnect(uvc);
+	/*
+	 * Stop the video stream before deactivating the function: deactivation
+	 * takes cdev->lock, which the composite core may hold while it waits
+	 * for in-flight requests to be released (e.g. on SET_CONFIGURATION).
+	 */
 	uvcg_video_disable(&uvc->video);
+	uvc_function_disconnect(uvc);
 	uvcg_free_buffers(&uvc->video.queue);
 	uvc->func_connected = false;
 	wake_up_interruptible(&uvc->func_connected_queue);

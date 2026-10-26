@@ -439,6 +439,18 @@ uvc_video_complete(struct usb_ep *ep, struct usb_request *req)
 	}
 
 	/*
+	 * The endpoint is being disabled (disconnect, SET_CONFIGURATION or
+	 * usb_ep_disable()). Requeueing from here would hand the request
+	 * straight back to the UDC while it is draining the endpoint, so
+	 * park it in req_free to be freed by uvcg_video_disable().
+	 */
+	if (req->status == -ESHUTDOWN) {
+		list_add_tail(&req->list, &video->req_free);
+		spin_unlock_irqrestore(&video->req_lock, flags);
+		return;
+	}
+
+	/*
 	 * Here we check whether any request is available in the ready
 	 * list. If it is, queue it to the ep and add the current
 	 * usb_request to the req_free list - for video_pump to fill in.
@@ -512,7 +524,8 @@ uvc_video_alloc_requests(struct uvc_video *video)
 	unsigned int i;
 	int ret = -ENOMEM;
 
-	BUG_ON(video->req_size);
+	if (video->req_size)
+		return -EBUSY;
 
 	req_size = video->ep->maxpacket
 		 * max_t(unsigned int, video->ep->maxburst, 1)
@@ -732,6 +745,17 @@ int uvcg_video_enable(struct uvc_video *video)
 			  "Video enable failed, device is uninitialized.\n");
 		return -ENODEV;
 	}
+
+	/* The work queue is gone once the function has been unbound. */
+	if (!video->async_wq)
+		return -ENODEV;
+
+	/*
+	 * vb2_streamon() returns 0 on an already streaming queue, don't
+	 * allocate the requests a second time.
+	 */
+	if (uvc_queue_streaming(&video->queue))
+		return -EBUSY;
 
 	/*
 	 * Safe to access request related fields without req_lock because
