@@ -91,16 +91,30 @@ static int cs35l41_i2c_probe(struct i2c_client *client,
 		return ret;
 	}
 
+	ret = cs35l41_probe(cs35l41, pdata);
+	if (ret)
+		return ret;
+
+	/*
+	 * Register for SSR only once the amp is fully probed: the SSR
+	 * callback dereferences the drvdata, which is gone after a failed
+	 * (or deferred) probe.
+	 */
 	rc = snd_event_client_register(cs35l41->dev, &cs35l41_ssr_ops, NULL);
-	if (!rc) {
-		snd_event_notify(cs35l41->dev, SND_EVENT_UP);
-	} else {
+	if (rc) {
 		dev_err(cs35l41->dev,
 				"%s: Registration of PA SSR failed rc = %d\n",
 				__func__, rc);
+		regmap_write(cs35l41->regmap, CS35L41_IRQ1_MASK1, 0xFFFFFFFF);
+		snd_soc_unregister_component(cs35l41->dev);
+		wm_adsp2_remove(&cs35l41->dsp);
+		regulator_bulk_disable(cs35l41->num_supplies,
+				       cs35l41->supplies);
 		return rc;
 	}
-	return cs35l41_probe(cs35l41, pdata);
+	snd_event_notify(cs35l41->dev, SND_EVENT_UP);
+
+	return 0;
 }
 
 static int cs35l41_i2c_remove(struct i2c_client *client)

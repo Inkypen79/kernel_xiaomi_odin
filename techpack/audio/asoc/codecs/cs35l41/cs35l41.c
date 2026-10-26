@@ -275,6 +275,9 @@ static int cs35l41_fast_switch_en_get(struct snd_kcontrol *kcontrol,
 	return 0;
 }
 
+/* Upper bound (in 32-bit words) for a fast use case delta file */
+#define CS35L41_FAST_SWITCH_MAX_LEN	4096
+
 static int cs35l41_do_fast_switch(struct cs35l41_private *cs35l41)
 {
 	char			val_str[CS35L41_BUFSIZE];
@@ -298,7 +301,7 @@ static int cs35l41_do_fast_switch(struct cs35l41_private *cs35l41)
 	}
 
 	/* Parse number of data in file */
-	for (i = 0, j = 0; (char)fw->data[i] != ','; i++) {
+	for (i = 0, j = 0; i < fw->size && (char)fw->data[i] != ','; i++) {
 		if ((char)fw->data[i] == ' ') {
 			/* Skip white space */
 		} else {
@@ -313,6 +316,12 @@ static int cs35l41_do_fast_switch(struct cs35l41_private *cs35l41)
 			}
 		}
 	}
+	if (i >= fw->size) {
+		dev_err(cs35l41->dev, "No data length delimiter in %s\n",
+			fw_name);
+		ret	= -EINVAL;
+		goto exit;
+	}
 	i++;	/* points to beginning of next number */
 	val_str[j]	= '\0';
 	ret		= kstrtos32(val_str, 10, &data_ctl_len);
@@ -323,6 +332,14 @@ static int cs35l41_do_fast_switch(struct cs35l41_private *cs35l41)
 	}
 
 	dev_dbg(cs35l41->dev, "data_ctl_len:%u\n", data_ctl_len);
+
+	/* data_ctl_len counts the length word itself plus the values */
+	if (data_ctl_len <= 0 || data_ctl_len > CS35L41_FAST_SWITCH_MAX_LEN) {
+		dev_err(cs35l41->dev, "Invalid data length %d\n",
+			data_ctl_len);
+		ret	= -EINVAL;
+		goto exit;
+	}
 
 	data_ctl_buf	= kcalloc(1, data_ctl_len * sizeof(s32), GFP_KERNEL);
 	if (!data_ctl_buf) {
@@ -346,6 +363,13 @@ static int cs35l41_do_fast_switch(struct cs35l41_private *cs35l41)
 				dev_err(cs35l41->dev,
 					"kstrtos32 failed (%d) val_str:%s\n",
 					ret, val_str);
+				goto exit;
+			}
+			if (k >= data_ctl_len) {
+				dev_err(cs35l41->dev,
+					"More values than data length %d\n",
+					data_ctl_len);
+				ret	= -EINVAL;
 				goto exit;
 			}
 			data_ctl_buf[k] = cpu_to_be32(val);
@@ -1473,6 +1497,11 @@ static int cs35l41_pcm_hw_params(struct snd_pcm_substream *substream,
 		if (rate == cs35l41_fs_rates[i].rate)
 			break;
 	}
+	if (i == ARRAY_SIZE(cs35l41_fs_rates)) {
+		dev_err(cs35l41->dev, "%s: unsupported rate %u\n",
+			__func__, rate);
+		return -EINVAL;
+	}
 	regmap_update_bits(cs35l41->regmap, CS35L41_GLOBAL_CLK_CTRL,
 			CS35L41_GLOBAL_FS_MASK,
 			cs35l41_fs_rates[i].fs_cfg << CS35L41_GLOBAL_FS_SHIFT);
@@ -1559,8 +1588,10 @@ void cs35l41_ssr_recovery(struct device *dev, void *data)
 	int i;
 
 	ret = regmap_read(cs35l41->regmap, CS35L41_PWR_CTRL1, &global_en);
-	if ((global_en & CS35L41_GLOBAL_EN_MASK) == 0) {
-		dev_err(cs35l41->dev, "CS35L41 in standby mode, no need reset\n");
+	if (ret || (global_en & CS35L41_GLOBAL_EN_MASK) == 0) {
+		/* Amp is idle (or unreadable): don't power it up behind DAPM */
+		dev_info(cs35l41->dev, "CS35L41 in standby mode, no need reset\n");
+		return;
 	}
 	//perform digital mute firstly
 	regmap_update_bits(cs35l41->regmap,0x6000, 0x7ff << 3, 0x400 << 3 | 0x7);

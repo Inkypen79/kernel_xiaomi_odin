@@ -807,6 +807,8 @@ static const char *wm_adsp_mem_region_name(unsigned int type)
 }
 static int wm_halo_apply_calibration(struct snd_soc_dapm_widget *w);
 static int wm_adsp_k_ctl_put(struct wm_adsp *dsp, const char *name, int value);
+static int wm_adsp_k_ctl_put_own(struct wm_adsp *dsp, const char *name,
+				 int value);
 static int wm_adsp_k_ctl_get(struct wm_adsp *dsp, const char *name);
 
 #ifdef CONFIG_DEBUG_FS
@@ -1127,18 +1129,23 @@ static int wm_adsp_block_bypass_put(struct snd_kcontrol *kcontrol,
 
 	dsp->block_bypass = ucontrol->value.enumerated.item[0];
 
+	/*
+	 * Use this amp's own (name_prefix'ed) controls; the put takes
+	 * pwr_lock and only touches the DSP while it is running, otherwise
+	 * the value is cached and synced on the next boot.
+	 */
 	switch(dsp->block_bypass) {
 		case 0:
-			wm_adsp_k_ctl_put(dsp, "DSP1X Protection cd BYPASS_IN_ENH", 0x00000000);
-			wm_adsp_k_ctl_put(dsp, "DSP1X Protection cd BYPASS_EQ", 0x00000000);
-			wm_adsp_k_ctl_put(dsp, "DSP1X Protection cd BYPASS_ACTI", 0x00000000);
-			wm_adsp_k_ctl_put(dsp, "DSP1X Protection cd BYPASS_MBL", 0x00000000);
+			wm_adsp_k_ctl_put_own(dsp, "DSP1X Protection cd BYPASS_IN_ENH", 0x00000000);
+			wm_adsp_k_ctl_put_own(dsp, "DSP1X Protection cd BYPASS_EQ", 0x00000000);
+			wm_adsp_k_ctl_put_own(dsp, "DSP1X Protection cd BYPASS_ACTI", 0x00000000);
+			wm_adsp_k_ctl_put_own(dsp, "DSP1X Protection cd BYPASS_MBL", 0x00000000);
 			break;
 		case 1:
-			wm_adsp_k_ctl_put(dsp, "DSP1X Protection cd BYPASS_IN_ENH", 0x00400001);
-			wm_adsp_k_ctl_put(dsp, "DSP1X Protection cd BYPASS_EQ", 0x00400001);
-			wm_adsp_k_ctl_put(dsp, "DSP1X Protection cd BYPASS_ACTI", 0x00400001);
-			wm_adsp_k_ctl_put(dsp, "DSP1X Protection cd BYPASS_MBL", 0x00400001);
+			wm_adsp_k_ctl_put_own(dsp, "DSP1X Protection cd BYPASS_IN_ENH", 0x00400001);
+			wm_adsp_k_ctl_put_own(dsp, "DSP1X Protection cd BYPASS_EQ", 0x00400001);
+			wm_adsp_k_ctl_put_own(dsp, "DSP1X Protection cd BYPASS_ACTI", 0x00400001);
+			wm_adsp_k_ctl_put_own(dsp, "DSP1X Protection cd BYPASS_MBL", 0x00400001);
 			break;
 		default:
 			break;
@@ -4388,6 +4395,43 @@ static int wm_adsp_k_ctl_put(struct wm_adsp *dsp, const char *name, int value)
 	wm_coeff_k_put(kctl, &ucontrol);
 
 	return 0;
+}
+
+/*
+ * Like wm_adsp_k_ctl_put(), but for this DSP's own control: prepend the
+ * component name_prefix (so "RCV" doesn't hit the other amp) and go through
+ * wm_coeff_put(), which takes pwr_lock and only writes while running.
+ */
+static int wm_adsp_k_ctl_put_own(struct wm_adsp *dsp, const char *name,
+				 int value)
+{
+	struct snd_kcontrol *kctl = NULL;
+	struct snd_ctl_elem_value ucontrol;
+	struct wm_coeff_ctl *ctl;
+	char full_name[SNDRV_CTL_ELEM_ID_NAME_MAXLEN];
+	const char *prefix = dsp->component->name_prefix;
+
+	if (prefix)
+		snprintf(full_name, sizeof(full_name), "%s %s", prefix, name);
+	else
+		strlcpy(full_name, name, sizeof(full_name));
+
+	kctl = snd_soc_card_get_kcontrol(dsp->component->card, full_name);
+	if (kctl == NULL) {
+		adsp_warn(dsp, "%s: %s isn't found\n", __func__, full_name);
+		return -ENOENT;
+	}
+
+	ctl = bytes_ext_to_ctl((struct soc_bytes_ext *)kctl->private_value);
+	if (ctl->dsp != dsp || ctl->len > sizeof(ucontrol.value.bytes.data))
+		return -EINVAL;
+
+	adsp_dbg(dsp, "%s: %s:0x%x\n", __func__, kctl->id.name, value);
+	memset(&ucontrol, 0, sizeof(ucontrol));
+	value = cpu_to_be32(value);
+	memcpy((char *)ucontrol.value.bytes.data, (char *)&value, sizeof(value));
+
+	return wm_coeff_put(kctl, &ucontrol);
 }
 
 static int wm_adsp_k_ctl_get(struct wm_adsp *dsp, const char *name)

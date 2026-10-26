@@ -455,17 +455,26 @@ static ssize_t device_read(struct file *fp, char __user *buff,
 *
 * @return number of bytes actually written
 */
-static ssize_t device_write(struct file *fp, const char *buff,
+static ssize_t device_write(struct file *fp, const char __user *buff,
 	size_t length, loff_t *ppos)
 {
 	ssize_t ret_val;
+	char *kbuf;
 
-	ret_val = 0;
-	if ((buff != NULL) && (length != 0))
-		ret_val = elliptic_data_io_write(ELLIPTIC_ULTRASOUND_SET_PARAMS,
-			buff, length);
+	if ((buff == NULL) || (length == 0) ||
+		(length > (ELLIPTIC_SET_PARAMS_SIZE * 4)))
+		return -EINVAL;
 
-	return ret_val >= 0 ? (ssize_t)length : 0;
+	/* buff is a user pointer, never hand it to the DSP code directly */
+	kbuf = memdup_user(buff, length);
+	if (IS_ERR(kbuf))
+		return PTR_ERR(kbuf);
+
+	ret_val = elliptic_data_io_write(ELLIPTIC_ULTRASOUND_SET_PARAMS,
+		kbuf, length);
+	kfree(kbuf);
+
+	return ret_val >= 0 ? (ssize_t)length : ret_val;
 }
 
 
@@ -489,18 +498,25 @@ static long device_ioctl(struct file *fp, unsigned int number,
 		break;
 
 	case IOCTL_ELLIPTIC_DATA_IO_MIRROR:
-		data_ptr = (unsigned char *)param;
-		mirror_tag = *(unsigned int *)data_ptr;
-		mirror_payload_size = *((unsigned int *)data_ptr + 1);
+		if (get_user(mirror_tag, (unsigned int __user *)param) ||
+			get_user(mirror_payload_size,
+				(unsigned int __user *)param + 1))
+			return -EFAULT;
 
 		if ((mirror_tag == MIRROR_TAG) &&
 			(mirror_payload_size != 0) &&
 			(mirror_payload_size <=
 			(ELLIPTIC_SET_PARAMS_SIZE * 4))) {
 
+			data_ptr = memdup_user((void __user *)(param + 8),
+				mirror_payload_size);
+			if (IS_ERR(data_ptr))
+				return PTR_ERR(data_ptr);
+
 			err = elliptic_data_io_write(
 				ELLIPTIC_ULTRASOUND_SET_PARAMS,
-				(data_ptr + 8), mirror_payload_size);
+				data_ptr, mirror_payload_size);
+			kfree(data_ptr);
 
 			if (err != 0) {
 				EL_PRINT_E("elliptic_data_io_write failed");

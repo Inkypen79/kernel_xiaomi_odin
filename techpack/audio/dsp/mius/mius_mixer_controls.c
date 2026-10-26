@@ -454,21 +454,27 @@ int mius_ultrasound_tx_port_set(struct snd_kcontrol *kcontrol,
 					  struct snd_ctl_elem_value *ucontrol)
 {
 	int ret;
+	uint32_t enable = ucontrol->value.integer.value[0] ? 1 : 0;
 
-	if (ultrasound_tx_port_cache == ucontrol->value.integer.value[0]) {
+	if (ultrasound_tx_port_cache == enable) {
 		MI_PRINT_E("ultrasound_tx_port_set: ignoring duplicate request");
 		return 0;
 	}
 
-	ultrasound_tx_port_cache = ucontrol->value.integer.value[0];
-	printk(KERN_DEBUG "[MIUS] Via ULTRASOUND_TX_PORT_ID enable=%d", ultrasound_tx_port_cache);
-	if (ultrasound_tx_port_cache)
+	printk(KERN_DEBUG "[MIUS] Via ULTRASOUND_TX_PORT_ID enable=%d", enable);
+	if (enable) {
 		ret = mius_open_port(ULTRASOUND_TX_PORT_ID);
-	else
+		/* Only remember "open" if it worked, so a retry is not dropped */
+		if (!ret)
+			ultrasound_tx_port_cache = 1;
+	} else {
 		ret = mius_close_port(ULTRASOUND_TX_PORT_ID);
+		/* The port is gone (or the DSP is) either way */
+		ultrasound_tx_port_cache = 0;
+	}
 
 	MI_PRINT_E("ultrasound_tx_port: enable=%d ret=%d",
-		ultrasound_tx_port_cache, ret);
+		enable, ret);
 
 	return ret;
 }

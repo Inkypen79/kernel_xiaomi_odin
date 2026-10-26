@@ -34,6 +34,7 @@
 /* includes copy_user vice versa */
 #include <linux/spinlock.h>
 #include <linux/slab.h>
+#include <linux/sizes.h>
 #include <linux/stat.h>
 #include <linux/init.h>
 #include <linux/platform_device.h>
@@ -67,8 +68,6 @@
 
 #define CIRRUS_RX_GET_IODATA 0x00A1AF09
 #define CIRRUS_TX_GET_IODATA 0x00A1BF09
-
-static struct crus_sp_ioctl_header crus_sp_hdr;
 
 static struct crus_control_t this_ctrl = {
 	.fb_port_index = 2,
@@ -899,10 +898,6 @@ static int msm_routing_crus_vol_attn_put(struct snd_kcontrol *kcontrol,
 	const int crus_set = ucontrol->value.integer.value[0];
 	struct crus_dual_data_t data;
 
-	mutex_lock(&this_ctrl.sp_lock);
-
-	this_ctrl.vol_atten = crus_set;
-
 	switch (crus_set) {
 		case 0: /* 0dB */
 			data.data1 = VOL_ATTN_MAX;
@@ -919,6 +914,10 @@ static int msm_routing_crus_vol_attn_put(struct snd_kcontrol *kcontrol,
 		default:
 			return -EINVAL;
 	}
+
+	mutex_lock(&this_ctrl.sp_lock);
+
+	this_ctrl.vol_atten = crus_set;
 
 	crus_set_param(this_ctrl.ff_port, CIRRUS_SP,
 				CRUS_PARAM_RX_SET_ATTENUATION, &data,
@@ -1206,6 +1205,7 @@ static long crus_sp_shared_ioctl(struct file *f, unsigned int cmd,
 	int result = 0, port;
 	uint32_t bufsize = 0, size;
 	void *io_data = NULL;
+	struct crus_sp_ioctl_header crus_sp_hdr = {0};
 
 	pr_info("%s\n", __func__);
 
@@ -1215,6 +1215,9 @@ static long crus_sp_shared_ioctl(struct file *f, unsigned int cmd,
 		goto exit;
 	}
 
+	/* Never copy more than the header itself */
+	size = min_t(uint32_t, size, sizeof(crus_sp_hdr));
+
 	/* Copy IOCTL header from usermode */
 	if (copy_from_user(&crus_sp_hdr, arg, size)) {
 		pr_err("CRUS_SP: copy_from_user (struct) failed\n");
@@ -1223,7 +1226,17 @@ static long crus_sp_shared_ioctl(struct file *f, unsigned int cmd,
 	}
 
 	bufsize = crus_sp_hdr.data_length;
+	if (!bufsize || bufsize > SZ_64K) {
+		pr_err("CRUS_SP: invalid data length %u\n", bufsize);
+		result = -EINVAL;
+		goto exit;
+	}
+
 	io_data = kzalloc(bufsize, GFP_KERNEL);
+	if (!io_data) {
+		result = -ENOMEM;
+		goto exit;
+	}
 
 	switch (cmd) {
 	case CRUS_SP_IOCTL_GET:
