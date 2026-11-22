@@ -7,6 +7,8 @@
 #define pr_fmt(fmt) "mi_disp_feature:[%s:%d] " fmt, __func__, __LINE__
 
 #include <linux/module.h>
+#include <linux/device.h>
+#include <linux/kobject.h>
 #include <linux/mutex.h>
 #include <linux/slab.h>
 #include <linux/fs.h>
@@ -135,6 +137,11 @@ static int mi_disp_feature_thread_destroy(struct disp_feature *df, int disp_id)
 	return ret;
 }
 
+static void mi_disp_display_dev_release(struct device *dev)
+{
+	kfree(dev);
+}
+
 int mi_disp_feature_attach_display(void *display, int disp_id, int intf_type)
 {
 	struct disp_feature *df = mi_get_disp_feature();
@@ -150,13 +157,32 @@ int mi_disp_feature_attach_display(void *display, int disp_id, int intf_type)
 		dd_ptr->display = display;
 		dd_ptr->intf_type = intf_type;
 
-		dd_ptr->dev = device_create(df->class, df->pdev, 0, dd_ptr,
-				"disp-%s-%d", get_disp_intf_type_name(intf_type), disp_id);
-		if (IS_ERR(dd_ptr->dev)) {
+		/*
+		 * Open-coded device_create() so that KOBJ_ADD is only sent once
+		 * the attribute group exists: ueventd labels disp-DSI-N/(fod_ui,
+		 * disp_param, ...) when it handles that uevent. The group is
+		 * private to mi_disp_sysfs.c, so it cannot go in dev->groups.
+		 */
+		dd_ptr->dev = kzalloc(sizeof(*dd_ptr->dev), GFP_KERNEL);
+		if (!dd_ptr->dev) {
+			ret = -ENOMEM;
+			goto err_exit;
+		}
+		device_initialize(dd_ptr->dev);
+		dd_ptr->dev->class = df->class;
+		dd_ptr->dev->parent = df->pdev;
+		dd_ptr->dev->release = mi_disp_display_dev_release;
+		dev_set_drvdata(dd_ptr->dev, dd_ptr);
+		ret = dev_set_name(dd_ptr->dev, "disp-%s-%d",
+				get_disp_intf_type_name(intf_type), disp_id);
+		if (ret)
+			goto err_put;
+		dev_set_uevent_suppress(dd_ptr->dev, true);
+		ret = device_add(dd_ptr->dev);
+		if (ret) {
 			DISP_ERROR("create device failed for disp-%s-%d\n",
 				get_disp_intf_type_name(intf_type), disp_id);
-			ret = -ENODEV;
-			goto err_exit;
+			goto err_put;
 		}
 
 		ret = mi_disp_create_device_attributes(dd_ptr->dev);
@@ -164,6 +190,8 @@ int mi_disp_feature_attach_display(void *display, int disp_id, int intf_type)
 			DISP_ERROR("failed to create sysfs attrs\n");
 			goto err_dev;
 		}
+		dev_set_uevent_suppress(dd_ptr->dev, false);
+		kobject_uevent(&dd_ptr->dev->kobj, KOBJ_ADD);
 
 		ret = mi_disp_feature_thread_create(df, disp_id);
 		if (ret) {
@@ -201,6 +229,11 @@ err_sysfs:
 	mi_disp_remove_device_attributes(dd_ptr->dev);
 err_dev:
 	device_unregister(dd_ptr->dev);
+	dd_ptr->dev = NULL;
+	goto err_exit;
+err_put:
+	/* not added yet: drop the initial reference, release() frees it */
+	put_device(dd_ptr->dev);
 	dd_ptr->dev = NULL;
 err_exit:
 	return ret;

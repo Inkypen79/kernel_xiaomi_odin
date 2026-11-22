@@ -31,14 +31,19 @@ void I2C_Read_Data(struct cam_ois_ctrl_t *o_ctrl, uint32_t addr, uint32_t length
 
 void I2C_Write_Data(struct cam_ois_ctrl_t *o_ctrl,uint32_t addr, uint32_t length,uint8_t* data, uint32_t delay)
 {
-	static struct cam_sensor_i2c_reg_array w_data[256] = { {0} };
+	struct cam_sensor_i2c_reg_array *w_data;
 	struct cam_sensor_i2c_reg_setting write_setting;
 	uint32_t i = 0;
 	int32_t rc = 0;
-	if (!data || !o_ctrl || (length < 1)) {
+	if (!data || !o_ctrl || (length < 1) || (length > 256)) {
 		CAM_ERR(CAM_OIS, "Invalid Args");
 		return;
 	}
+
+	/* per-call buffer: several OIS instances may write concurrently */
+	w_data = kcalloc(length, sizeof(*w_data), GFP_KERNEL);
+	if (!w_data)
+		return;
 
 	for (i = 0;i < length && i < 256; i++) {
 		w_data[i].reg_addr = addr;
@@ -60,6 +65,7 @@ void I2C_Write_Data(struct cam_ois_ctrl_t *o_ctrl,uint32_t addr, uint32_t length
 	for (i = 0; i < length && i < 256; i+=4) {
 		CAM_DBG(CAM_OIS, "[OISDEBUG] write addr 0x%04x = 0x%02x 0x%02x 0x%02x 0x%02x", w_data[i].reg_addr, data[i], data[i+1], data[i+2], data[i+3]);
 	}
+	kfree(w_data);
 }
 
 uint8_t load_fw_buff(
@@ -69,27 +75,30 @@ uint8_t load_fw_buff(
 	uint32_t read_length)
 {
 
-	uint16_t                           total_bytes = 0;
-	uint8_t                           *ptr = NULL;
-	int32_t                            rc = 0, i;
+	int32_t                            rc = 0;
 	const struct firmware             *fw = NULL;
 	const char                        *fw_name = NULL;
 	struct device                     *dev = &(o_ctrl->pdev->dev);
 
 	fw_name = firmware_name;
 
+	/* returns non-zero on failure; caller must not use read_data then */
 	rc = request_firmware(&fw, fw_name, dev);
 	if (rc) {
 		CAM_ERR(CAM_OIS, "Failed to locate %s", fw_name);
-	} else {
-		total_bytes = fw->size;
-		ptr = (uint8_t *)fw->data;
-		if (read_data) {
-			for (i = 0; i < read_length; i++) {
-				read_data[i] = *(ptr + i);
-			}
-		}
+		return 1;
 	}
+
+	if (fw->size < read_length) {
+		CAM_ERR(CAM_OIS, "%s too small: %zu < %u",
+			fw_name, fw->size, read_length);
+		release_firmware(fw);
+		return 1;
+	}
+
+	if (read_data)
+		memcpy(read_data, fw->data, read_length);
+
 	release_firmware(fw);
 	return 0;
 }

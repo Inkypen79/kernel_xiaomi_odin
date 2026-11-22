@@ -1358,6 +1358,9 @@ int dsi_display_set_power(struct drm_connector *connector,
 		if (update_bl && display->panel->mi_cfg.bl_need_update)
 			mi_dsi_display_update_backlight(display);
 
+		/* re-evaluate doze brightness work waiting on power_mode */
+		mi_dsi_display_wakeup_pending_doze_work(display);
+
 		event.disp_id = disp_id;
 		event.type = MI_DISP_EVENT_POWER;
 		event.length = sizeof(power_mode);

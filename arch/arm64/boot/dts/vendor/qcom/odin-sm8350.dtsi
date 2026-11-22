@@ -426,6 +426,11 @@ And public attribution of xiaomi platforms(like venus and so and)
 	status = "disabled";
 };
 
+/* Unused on odin (panel avdd is L13C); gpio12 belongs to qupv3_se2_spi (IR) */
+&display_panel_avdd {
+	status = "disabled";
+};
+
 &mdss_mdp {
 	connectors = <&smmu_sde_unsec &smmu_sde_sec &sde_wb &sde_dsi
 		&sde_rscc>;
@@ -466,8 +471,8 @@ And public attribution of xiaomi platforms(like venus and so and)
 
 &pmk8350_vadc {
 	pinctrl-names = "default";
-	pinctrl-0 = <&pm8350b_wl_chg_therm_default>;
-	pinctrl-1 = <&pm8350b_usb_conn_therm_default>;
+	pinctrl-0 = <&pm8350b_wl_chg_therm_default
+			&pm8350b_usb_conn_therm_default>;
 
 	pm8350_cam_flash_therm {
 		reg = <PM8350_ADC7_AMUX_THM2_100K_PU>;
@@ -705,11 +710,48 @@ And public attribution of xiaomi platforms(like venus and so and)
 	};
 };
 
+/* Battery-current BCL level-1 alarm: official odin value (CAF default 7500) */
+&ibat_lvl1 {
+	temperature = <9500>;
+};
+
+/*
+ * pstore/ramoops (4 MiB, like Xiaomi's ramoops_memreserve=4M). Plain HLOS
+ * DDR between modem_region (ends 0x9f000000) and the 0xd0000000+ trustedvm/
+ * removed_region window, clear of the low kernel/ramdisk load area.
+ */
+&reserved_memory {
+	ramoops@c0000000 {
+		compatible = "ramoops";
+		reg = <0x0 0xc0000000 0x0 0x400000>;
+		record-size = <0x40000>;
+		console-size = <0x100000>;
+		pmsg-size = <0x200000>;
+	};
+};
+
 &pcie1 {
 	status = "disabled";
 };
 
 &pcie1_msi {
+	status = "disabled";
+};
+
+/* No WiGig on odin; its gpio47/gpio67 are the UWB SPI CS and IRQ */
+&wil6210 {
+	status = "disabled";
+};
+
+/* No RTC6226 FM radio on odin; its fmint gpio50 is a qup11 (FTS touch SPI) pin */
+&qupv3_se13_i2c {
+	nq@64 {
+		status = "disabled";
+	};
+};
+
+/* qcom,id 4 is out of range for the 4-channel flash driver; unused on odin */
+&pm8350c_flashlight {
 	status = "disabled";
 };
 

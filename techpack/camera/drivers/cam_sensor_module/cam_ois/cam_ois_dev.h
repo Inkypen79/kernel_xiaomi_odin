@@ -106,6 +106,9 @@ struct cam_ois_intf_params {
  * @is_ois_pre_init :   flag for pre init settings
  * @i2c_post_init_data: ois i2c post init settings
  * @is_ois_post_init:   flag for post init settings
+ * @init_failed     :   INIT failed after power-up; OIS was powered down and
+ *                      state reset to ACQUIRE. START/STOP become no-ops so
+ *                      streaming continues without OIS (stock behaviour).
  *
  */
 struct cam_ois_ctrl_t {
@@ -132,6 +135,7 @@ struct cam_ois_ctrl_t {
 	uint8_t is_ois_pre_init; //xiaomi add
 	struct i2c_settings_array i2c_post_init_data; //xiaomi add
 	uint8_t is_ois_post_init; //xiaomi add
+	bool init_failed;
 };
 
 /**

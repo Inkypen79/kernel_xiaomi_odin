@@ -482,12 +482,17 @@ static ssize_t wls_bin_store(struct class *c, struct class_attribute *attr,
 		     (serial_number <
 		      (total_length + MAX_STR_LEN - 1) / MAX_STR_LEN);
 		     ++tmp_serial, ++serial_number) {
+			/* don't read past the end of the user buffer */
+			u8 chunk[MAX_STR_LEN] = { 0 };
+			size_t off = tmp_serial * MAX_STR_LEN;
+
+			memcpy(chunk, buf + off,
+			       min_t(size_t, MAX_STR_LEN, count - off));
 			for (retry = 0; retry < 3; ++retry) {
 				rc = write_wls_bin_prop_id(
 					bcdev, &bcdev->psy_list[PSY_TYPE_XM],
 					XM_PROP_WLS_BIN, total_length,
-					serial_number, fw_area,
-					(u8 *)buf + tmp_serial * MAX_STR_LEN);
+					serial_number, fw_area, chunk);
 				pr_err("total_length:%d, serial_number:%d, retry:%d\n",
 				       total_length, serial_number, retry);
 				if (rc == 0)
@@ -2228,11 +2233,14 @@ static ssize_t request_vdm_cmd_store(struct class *c,
 	struct battery_chg_dev *bcdev =
 		container_of(c, struct battery_chg_dev, battery_class);
 	int cmd, ret;
-	unsigned char buffer[64];
-	unsigned char data[32];
+	unsigned char buffer[65] = { 0 };
+	unsigned char data[32] = { 0 };
 	int ccount;
 
-	ret = sscanf(buf, "%d,%s\n", &cmd, buffer);
+	/* 64 hex chars max, so StringToHex() fits in data[32] */
+	ret = sscanf(buf, "%d,%64s", &cmd, buffer);
+	if (ret < 1)
+		return -EINVAL;
 
 	pr_info("%s:buf:%s cmd:%d, buffer:%s\n", __func__, buf, cmd, buffer);
 

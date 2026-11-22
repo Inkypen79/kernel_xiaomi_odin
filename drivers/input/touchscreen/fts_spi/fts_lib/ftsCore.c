@@ -779,14 +779,24 @@ int readConfig(u16 offset, u8 *outBuf, int len)
 int fts_disableInterrupt(void)
 {
 	if (getClient() != NULL) {
+		unsigned long flags;
+		bool disabled_now = false;
+
+		/* disable_irq_count is shared with the NoSync/enable paths */
+		spin_lock_irqsave(&fts_int, flags);
 		logError(0, "%s Number of disable = %d \n", tag,
 			 disable_irq_count);
 		if (disable_irq_count == 0) {
 			logError(0, "%s Excecuting Disable... \n", tag);
-			disable_irq(getClient()->irq);
+			disable_irq_nosync(getClient()->irq);
 			disable_irq_count++;
-			logError(1, "%s Interrupt Disabled!\n", tag);
+			disabled_now = true;
 		}
+		spin_unlock_irqrestore(&fts_int, flags);
+		/* like disable_irq(): no handler is running once we return */
+		synchronize_irq(getClient()->irq);
+		if (disabled_now)
+			logError(1, "%s Interrupt Disabled!\n", tag);
 		return OK;
 	} else {
 		logError(1, "%s %s: Impossible get client irq... ERROR %08X\n",
@@ -803,7 +813,9 @@ int fts_disableInterrupt(void)
 int fts_disableInterruptNoSync(void)
 {
 	if (getClient() != NULL) {
-		spin_lock_irq(&fts_int);
+		unsigned long flags;
+
+		spin_lock_irqsave(&fts_int, flags);
 		logError(0, "%s Number of disable = %d \n", tag,
 			 disable_irq_count);
 		if (disable_irq_count == 0) {
@@ -812,7 +824,7 @@ int fts_disableInterruptNoSync(void)
 			disable_irq_count++;
 		}
 
-		spin_unlock_irq(&fts_int);
+		spin_unlock_irqrestore(&fts_int, flags);
 		logError(0, "%s Interrupt No Sync Disabled!\n", tag);
 		return OK;
 	} else {
@@ -839,15 +851,21 @@ int fts_resetDisableIrqCount(void)
 int fts_enableInterrupt(void)
 {
 	if (getClient() != NULL) {
+		unsigned long flags;
+		bool enabled_now = false;
 
+		spin_lock_irqsave(&fts_int, flags);
 		logError(0, "%s Number of re-enable = %d \n", tag,
 			 disable_irq_count);
 		while (disable_irq_count > 0) {
 			logError(0, "%s Excecuting Enable... \n", tag);
 			enable_irq(getClient()->irq);
 			disable_irq_count--;
-			logError(1, "%s Interrupt Enabled!\n", tag);
+			enabled_now = true;
 		}
+		spin_unlock_irqrestore(&fts_int, flags);
+		if (enabled_now)
+			logError(1, "%s Interrupt Enabled!\n", tag);
 		return OK;
 	} else {
 		logError(1, "%s %s: Impossible get client irq... ERROR %08X\n",

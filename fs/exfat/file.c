@@ -555,6 +555,17 @@ static int exfat_ioctl_fitrim(struct inode *inode, unsigned long arg)
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
 
+	/*
+	 * Discarding "free" clusters of a read-only volume can destroy data,
+	 * e.g. when it was forced read-only because the bitmap is inaccurate.
+	 */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 0, 0)
+	if (sb_rdonly(inode->i_sb))
+#else
+	if (inode->i_sb->s_flags & MS_RDONLY)
+#endif
+		return -EROFS;
+
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0)
 	if (!bdev_max_discard_sectors(inode->i_sb->s_bdev))
 #else

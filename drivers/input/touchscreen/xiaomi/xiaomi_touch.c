@@ -54,6 +54,13 @@ static long xiaomi_touch_dev_ioctl(struct file *file, unsigned int cmd,
 
 	mutex_lock(&dev->mutex);
 	ret = copy_from_user(&buf, (int __user *)argp, sizeof(buf));
+	/* values start at buf[3] and are copied to thp_cmd_buf[4] */
+	if (user_cmd == SET_LONG_VALUE &&
+			(buf[2] < 0 || buf[2] > MAX_BUF_SIZE - 4)) {
+		pr_err("%s invalid long value len:%d\n", __func__, buf[2]);
+		mutex_unlock(&dev->mutex);
+		return -EINVAL;
+	}
 	if (buf[0] < 0 || buf[0] > 1) {
 		pr_err("%s invalid param\n", __func__);
 		mutex_unlock(&dev->mutex);
@@ -154,6 +161,10 @@ static int xiaomi_touch_dev_mmap(struct file *file, struct vm_area_struct *vma)
 	rx_num = pdata->touch_data->get_touch_rx_num();
 	*/
 
+	/* only the raw_data buffer (RAW_SIZE) may be mapped */
+	if (offset >= RAW_SIZE || size > RAW_SIZE - offset)
+		return -EINVAL;
+
 	pos = (unsigned long)pdata->phy_base + offset;
 	page = pos >> PAGE_SHIFT;
 
@@ -224,8 +235,10 @@ int xiaomitouch_register_modedata(int touchId, struct xiaomi_touch_interface *da
 	int ret = 0;
 	struct xiaomi_touch_interface *touch_data = NULL;
 
-	if (!touch_pdata)
-		ret = -ENOMEM;
+	if (!touch_pdata || touchId < 0 ||
+	    touchId >= ARRAY_SIZE(touch_pdata->touch_data) ||
+	    !touch_pdata->touch_data[touchId])
+		return -ENODEV;
 
 	touch_data = touch_pdata->touch_data[touchId];
 	pr_info("%s\n", __func__);
@@ -367,13 +380,24 @@ void update_bump_sample_rate(bool state)
 		return;
 
 	touch_data = touch_pdata->touch_data[0];
+	/* touch driver not registered (yet) */
+	if (!touch_data || !touch_data->setModeValue || !touch_data->resetMode)
+		return;
 
+	/*
+	 * High touch polling = firmware game mode (fts: 0xC0 0x05 byte 2, plus
+	 * the 30 s idle time and the DT game grip tables) with follow
+	 * performance (Touch_Tolerance) and tap sensitivity (Touch_UP_THRESHOLD)
+	 * saturated: the out-of-range values are clamped to the driver max
+	 * (5 on fts). Touch_Edge_Filter is left at its default (2): forcing it
+	 * to 0 zeroed the landscape corner rejection zones while in game mode.
+	 * Disable (and every suspend) resets all modes to their defaults.
+	 */
 	if(touch_pdata->bump_sample_rate && state) {
-		touch_data->setModeValue(0, 1);
-		touch_data->setModeValue(1, 1);
-		touch_data->setModeValue(3, 34);
-		touch_data->setModeValue(2, 99);
-		touch_data->setModeValue(7, 0);
+		touch_data->setModeValue(Touch_Game_Mode, 1);
+		touch_data->setModeValue(Touch_Active_MODE, 1);
+		touch_data->setModeValue(Touch_Tolerance, 34);
+		touch_data->setModeValue(Touch_UP_THRESHOLD, 99);
 	} else {
 		touch_data->resetMode(0);
 	}
@@ -697,8 +721,10 @@ struct device_attribute *attr, const char *buf, size_t count)
 			}
 		} else if (*p == ' ') {
 			if (new_data) {
-				i++;
 				new_data = false;
+				/* input[] and thp_cmd_buf[] hold MAX_BUF_SIZE values */
+				if (++i >= MAX_BUF_SIZE)
+					break;
 			}
 		} else {
 			break;
@@ -1053,6 +1079,36 @@ static ssize_t fod_press_status_show(struct device *dev,
 	return snprintf(buf, PAGE_SIZE, "%d\n", pdata->fod_press_status_value);
 }
 
+/*
+ * Enable node of the UDFPS long-press sensor HAL, written '1'/'0' on every
+ * activate/deactivate. FOD long-press arming is owned by the fingerprint HAL
+ * (fod_status), so only remember the value here: the sensor HAL writes 0 after
+ * each one-shot event and must not disarm FOD under the fingerprint HAL.
+ */
+static ssize_t fod_longpress_gesture_enabled_show(struct device *dev,
+				     struct device_attribute *attr, char *buf)
+{
+	struct xiaomi_touch_pdata *pdata = dev_get_drvdata(dev);
+
+	return snprintf(buf, PAGE_SIZE, "%d\n",
+			READ_ONCE(pdata->fod_longpress_gesture_enabled));
+}
+
+static ssize_t fod_longpress_gesture_enabled_store(struct device *dev,
+				      struct device_attribute *attr,
+				      const char *buf, size_t count)
+{
+	struct xiaomi_touch_pdata *pdata = dev_get_drvdata(dev);
+	unsigned int input;
+
+	if (kstrtouint(buf, 10, &input) || input > 1)
+		return -EINVAL;
+
+	WRITE_ONCE(pdata->fod_longpress_gesture_enabled, input);
+
+	return count;
+}
+
 static DEVICE_ATTR(touch_thp_cmd, (S_IRUGO | S_IWUSR | S_IWGRP),
 			thp_cmd_status_show, thp_cmd_status_store);
 
@@ -1121,6 +1177,10 @@ static DEVICE_ATTR(update_rawdata, (S_IRUGO | S_IWUSR | S_IWGRP), update_rawdata
 
 static DEVICE_ATTR(fod_press_status, (0664), fod_press_status_show, NULL);
 
+static DEVICE_ATTR(fod_longpress_gesture_enabled, (S_IRUGO | S_IWUSR | S_IWGRP),
+		   fod_longpress_gesture_enabled_show,
+		   fod_longpress_gesture_enabled_store);
+
 static struct attribute *touch_attr_group[] = {
 	&dev_attr_enable_touch_raw.attr,
 	&dev_attr_enable_touch_delta.attr,
@@ -1148,6 +1208,17 @@ static struct attribute *touch_attr_group[] = {
 	&dev_attr_update_rawdata.attr,
 	&dev_attr_suspend_state.attr,
 	&dev_attr_fod_press_status.attr,
+	&dev_attr_fod_longpress_gesture_enabled.attr,
+	NULL,
+};
+
+static const struct attribute_group touch_attr_grp = {
+	.attrs = touch_attr_group,
+};
+
+/* attached at device_create time so they exist before the KOBJ_ADD uevent */
+static const struct attribute_group *touch_attr_groups[] = {
+	&touch_attr_grp,
 	NULL,
 };
 
@@ -1309,17 +1380,18 @@ static int xiaomi_touch_probe(struct platform_device *pdev)
 	if (!xiaomi_touch_dev.class)
 		xiaomi_touch_dev.class = class_create(THIS_MODULE, "touch");
 
-	if (!xiaomi_touch_dev.class) {
+	if (IS_ERR_OR_NULL(xiaomi_touch_dev.class)) {
 		pr_err("%s create device class err\n", __func__);
+		ret = xiaomi_touch_dev.class ? PTR_ERR(xiaomi_touch_dev.class) : -ENOMEM;
+		xiaomi_touch_dev.class = NULL;
 		goto class_create_err;
 	}
 
-	xiaomi_touch_dev.dev = device_create(xiaomi_touch_dev.class, NULL, 'T', NULL, "touch_dev");
-	if (!xiaomi_touch_dev.dev) {
-		pr_err("%s create device dev err\n", __func__);
-		goto device_create_err;
-	}
-
+	/*
+	 * Everything the touch_dev attributes dereference (drvdata, touch_data[],
+	 * last_touch_events) must exist before the device and its attribute
+	 * group become visible.
+	 */
 	pdata->touch_data[0] = (struct xiaomi_touch_interface *)kzalloc(sizeof(struct xiaomi_touch_interface), GFP_KERNEL);
 	if (pdata->touch_data[0] == NULL) {
 		ret = -ENOMEM;
@@ -1330,27 +1402,37 @@ static int xiaomi_touch_probe(struct platform_device *pdev)
 	if (pdata->touch_data[1] == NULL) {
 		ret = -ENOMEM;
 		pr_err("%s alloc mem for touch_data\n", __func__);
-		goto sys_group_err;
+		goto data_mem_err;
 	}
 
 	pdata->last_touch_events = (struct last_touch_event *)kzalloc(sizeof(struct last_touch_event), GFP_KERNEL);
 	if (pdata->last_touch_events == NULL) {
 		ret = -ENOMEM;
 		pr_err("%s: alloc mem for last touch evnets\n", __func__);
-		goto sys_group_err;
+		goto data_mem_err;
 	}
 	pdata->device = &xiaomi_touch_dev;
-	dev_set_drvdata(xiaomi_touch_dev.dev, pdata);
 
+	/*
+	 * Attach the attribute group at creation (drvdata set before
+	 * device_add) so the files exist when ueventd handles KOBJ_ADD and
+	 * applies their SELinux labels.
+	 */
+	xiaomi_touch_dev.dev = device_create_with_groups(xiaomi_touch_dev.class,
+			NULL, 'T', pdata, touch_attr_groups, "touch_dev");
+	if (IS_ERR(xiaomi_touch_dev.dev)) {
+		ret = PTR_ERR(xiaomi_touch_dev.dev);
+		xiaomi_touch_dev.dev = NULL;
+		pr_err("%s create device dev err:%d\n", __func__, ret);
+		goto data_mem_err;
+	}
+
+	/*
+	 * Publish last: notify paths and the touch_pdata-guarded attributes use
+	 * xiaomi_touch_dev.dev, which is only valid from here on.
+	 */
 	touch_pdata = pdata;
 
-	xiaomi_touch_dev.attrs.attrs = touch_attr_group;
-	ret = sysfs_create_group(&xiaomi_touch_dev.dev->kobj, &xiaomi_touch_dev.attrs);
-	if (ret) {
-		pr_err("%s ERROR: Cannot create sysfs structure!:%d\n", __func__, ret);
-		ret = -ENODEV;
-		goto sys_group_err;
-	}
 	pdata->last_touch_events_proc =
 		proc_create("last_touch_events", 0644, NULL, &last_touch_events_ops);
 
@@ -1358,7 +1440,7 @@ static int xiaomi_touch_probe(struct platform_device *pdev)
 
 	return ret;
 
-sys_group_err:
+data_mem_err:
 	if (pdata->touch_data[0]) {
 		kfree(pdata->touch_data[0]);
 		pdata->touch_data[0] = NULL;
@@ -1371,9 +1453,6 @@ sys_group_err:
 		kfree(pdata->last_touch_events);
 		pdata->last_touch_events = NULL;
 	}
-data_mem_err:
-	device_destroy(xiaomi_touch_dev.class, 'T');
-device_create_err:
 	class_destroy(xiaomi_touch_dev.class);
 	xiaomi_touch_dev.class = NULL;
 class_create_err:
@@ -1397,7 +1476,7 @@ static int xiaomi_touch_remove(struct platform_device *pdev)
 {
 	int i;
 
-	sysfs_remove_group(&xiaomi_touch_dev.dev->kobj, &xiaomi_touch_dev.attrs);
+	/* the attribute group goes away with the device (dev->groups) */
 	device_destroy(xiaomi_touch_dev.class, 'T');
 	class_destroy(xiaomi_touch_dev.class);
 	xiaomi_touch_dev.class = NULL;

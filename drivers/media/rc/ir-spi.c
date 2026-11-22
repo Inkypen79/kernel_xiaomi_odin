@@ -17,6 +17,7 @@
 
 #define IR_SPI_DEFAULT_FREQUENCY	38000
 #define IR_SPI_MAX_BUFSIZE		32768
+#define IR_SPI_MAX_CARRIER		1000000
 
 struct ir_spi_data {
 	u32 freq;
@@ -42,13 +43,15 @@ static int ir_spi_tx(struct rc_dev *dev,
 
 	/* convert the pulse/space signal to raw binary signal */
 	for (i = 0; i < count; i++) {
-		unsigned int periods;
+		u64 periods;
 		int j;
 		u16 val;
 
-		periods = DIV_ROUND_CLOSEST(buffer[i] * idata->freq, 1000000);
+		/* 64-bit: buffer[i] (<= 500 ms) * freq overflows 32 bits */
+		periods = DIV_ROUND_CLOSEST_ULL((u64)buffer[i] * idata->freq,
+						1000000);
 
-		if (len + periods >= IR_SPI_MAX_BUFSIZE)
+		if (periods >= IR_SPI_MAX_BUFSIZE - len)
 			return -EINVAL;
 
 		/*
@@ -84,7 +87,8 @@ static int ir_spi_set_tx_carrier(struct rc_dev *dev, u32 carrier)
 {
 	struct ir_spi_data *idata = dev->priv;
 
-	if (!carrier)
+	/* the SPI clock is 16 * carrier; keep it sane and within u32 */
+	if (!carrier || carrier > IR_SPI_MAX_CARRIER)
 		return -EINVAL;
 
 	idata->freq = carrier;

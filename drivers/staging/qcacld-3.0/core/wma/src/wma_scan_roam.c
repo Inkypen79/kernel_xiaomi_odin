@@ -1255,6 +1255,7 @@ int wma_mlme_roam_synch_event_handler_cb(void *handle, uint8_t *event,
 
 	if (synch_event->vdev_id >= wma->max_bssid) {
 		wma_err("received invalid vdev_id %d", synch_event->vdev_id);
+		wma_allow_pm_after_roam_sync(wma);
 		return status;
 	}
 
@@ -1445,6 +1446,7 @@ cleanup_label:
 					       SIR_ROAMING_ABORT);
 		if (synch_event)
 			wma_post_roam_sync_failure(wma, synch_event->vdev_id);
+		wma_allow_pm_after_roam_sync(wma);
 	}
 	if (roam_synch_ind_ptr && roam_synch_ind_ptr->join_rsp)
 		qdf_mem_free(roam_synch_ind_ptr->join_rsp);

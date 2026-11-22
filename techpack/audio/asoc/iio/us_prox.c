@@ -154,7 +154,11 @@ int us_afe_callback(int data)
 {
 	int ret;
 	struct us_prox_el_data el_data;
+	struct us_prox_data *us_prox = smp_load_acquire(&g_us_prox);
 	struct timespec ts;
+
+	/* data2 and the padding before timestamp end up in the IIO buffer */
+	memset(&el_data, 0, sizeof(el_data));
 	getnstimeofday(&ts);
 	el_data.timestamp = timespec_to_ns(&ts);
 	pr_info("%s: data = %d\n", __func__, data);
@@ -164,8 +168,8 @@ int us_afe_callback(int data)
 	else
 		el_data.data1 = 5;
 
-	if (g_us_prox) {
-		ret = iio_push_to_buffers(g_us_prox->prox_idev, (unsigned char *)&el_data);
+	if (us_prox) {
+		ret = iio_push_to_buffers(us_prox->prox_idev, (unsigned char *)&el_data);
 		if (ret < 0)
 			pr_err("%s: failed to push us prox data to buffer, err=%d\n", __func__, ret);
 	}
@@ -342,14 +346,17 @@ static int us_prox_probe(struct platform_device *pdev)
 	us_prox->pdev = pdev;
 	dev_set_drvdata(&pdev->dev, us_prox);
 
-	g_us_prox = us_prox;
-
 	mutex_init(&us_prox->mutex);
 	ret = us_proximity_iio_setup(us_prox);
 	if (ret < 0) {
 		pr_err("%s: iio setup failed ret = %d\n", __func__, ret);
+		dev_set_drvdata(&pdev->dev, NULL);
+		kfree(us_prox);
 		return ret;
 	}
+
+	/* Publish only once prox_idev is fully set up */
+	smp_store_release(&g_us_prox, us_prox);
 
 	pr_info("%s: end\n", __func__);
 	return ret;
@@ -360,6 +367,9 @@ static int us_prox_remove(struct platform_device *pdev)
 	struct us_prox_data *us_prox;
 
 	us_prox = dev_get_drvdata(&pdev->dev);
+
+	if (g_us_prox == us_prox)
+		WRITE_ONCE(g_us_prox, NULL);
 
 	dev_set_drvdata(&pdev->dev, NULL);
 

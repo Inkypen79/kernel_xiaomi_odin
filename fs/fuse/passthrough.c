@@ -142,6 +142,14 @@ ssize_t fuse_passthrough_write_iter(struct kiocb *iocb_fuse,
 	} else {
 		struct fuse_aio_req *aio_req;
 
+		/* Same checks vfs_iter_write() does for the sync path */
+		ret = -EBADF;
+		if (!(passthrough_filp->f_mode & FMODE_WRITE))
+			goto out;
+		ret = -EINVAL;
+		if (!(passthrough_filp->f_mode & FMODE_CAN_WRITE))
+			goto out;
+
 		aio_req = kmalloc(sizeof(struct fuse_aio_req), GFP_KERNEL);
 		if (!aio_req) {
 			ret = -ENOMEM;
@@ -213,7 +221,7 @@ int fuse_passthrough_open(struct fuse_dev *fud, u32 lower_fd)
 	}
 
 	if (!passthrough_filp->f_op->read_iter ||
-	    !((passthrough_filp->f_path.mnt->mnt_flags | MNT_READONLY) ||
+	    !((passthrough_filp->f_path.mnt->mnt_flags & MNT_READONLY) ||
 	       passthrough_filp->f_op->write_iter)) {
 		pr_err("FUSE: passthrough file misses file operations.\n");
 		res = -EBADF;

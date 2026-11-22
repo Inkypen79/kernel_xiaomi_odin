@@ -443,7 +443,10 @@ static int32_t cam_eeprom_parse_memory_map(
 	else if (cmm_hdr->cmd_type == CAMERA_SENSOR_CMD_TYPE_I2C_CONT_RD)
 		validate_size = sizeof(struct cam_cmd_i2c_continuous_rd);
 	else if (cmm_hdr->cmd_type == CAMERA_SENSOR_CMD_TYPE_WAIT)
-		validate_size = sizeof(struct cam_cmd_unconditional_wait);
+		validate_size = (generic_op_code ==
+			CAMERA_SENSOR_WAIT_OP_COND) ?
+			sizeof(struct cam_cmd_conditional_wait) :
+			sizeof(struct cam_cmd_unconditional_wait);
 
 	if (remain_buf_len < validate_size ||
 	    *num_map >= (MSM_EEPROM_MAX_MEM_MAP_CNT *
@@ -648,6 +651,9 @@ static int32_t cam_eeprom_handle_continuous_write(
 	*list = &(i2c_list->list);
 	return rc;
 deallocate_i2c_list:
+	/* node was linked by cam_eeprom_get_i2c_ptr(): unlink before free */
+	list_del(&(i2c_list->list));
+	kfree(i2c_list->seq_settings.reg_data);
 	kfree(i2c_list);
 	return rc;
 }
@@ -901,7 +907,7 @@ static int32_t cam_eeprom_parse_write_memory_packet(
 					"Invalid Cmd_type rxed: %d\n",
 					cmm_hdr->cmd_type);
 				rc = -EINVAL;
-				break;
+				goto end;
 			}
 		}
 		cam_mem_put_cpu_buf(cmd_desc[i].mem_handle);
@@ -1057,6 +1063,14 @@ static int32_t cam_eeprom_init_pkt_parser(struct cam_eeprom_ctrl_t *e_ctrl,
 					&cmd_length_in_bytes, &num_map,
 					(remain_len -
 					processed_cmd_buf_in_bytes));
+				/* stop on error or no progress */
+				if (rc || !cmd_length_in_bytes) {
+					CAM_ERR(CAM_EEPROM,
+						"Failed to parse memory map rc %d len %u",
+						rc, cmd_length_in_bytes);
+					rc = rc ? rc : -EINVAL;
+					goto end;
+				}
 				processed_cmd_buf_in_bytes +=
 					cmd_length_in_bytes;
 				cmd_buf += cmd_length_in_bytes/sizeof(uint32_t);
@@ -1297,6 +1311,10 @@ static int32_t cam_eeprom_pkt_parse(struct cam_eeprom_ctrl_t *e_ctrl, void *arg)
 		if (rc) {
 			CAM_ERR(CAM_EEPROM,
 				"Failed in parsing the pkt");
+			vfree(e_ctrl->cal_data.map);
+			e_ctrl->cal_data.map = NULL;
+			e_ctrl->cal_data.num_data = 0;
+			e_ctrl->cal_data.num_map = 0;
 			cam_mem_put_cpu_buf(dev_config.packet_handle);
 			return rc;
 		}
@@ -1356,6 +1374,7 @@ static int32_t cam_eeprom_pkt_parse(struct cam_eeprom_ctrl_t *e_ctrl, void *arg)
 			csl_packet, e_ctrl);
 		if (rc < 0) {
 			CAM_ERR(CAM_EEPROM, "Failed: rc : %d", rc);
+			delete_eeprom_request(i2c_reg_settings);
 			cam_mem_put_cpu_buf(dev_config.packet_handle);
 			return rc;
 		}

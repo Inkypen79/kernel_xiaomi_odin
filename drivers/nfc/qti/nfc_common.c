@@ -258,6 +258,12 @@ int nfc_misc_probe(struct nfc_dev *nfc_dev,
 {
 	int ret = 0;
 
+	/* before the node exists: fops use the cold reset state */
+	mutex_init(&nfc_dev->cold_reset.lock);
+	nfc_dev->cold_reset.rsp_pending = false;
+	nfc_dev->cold_reset.is_nfc_enabled = false;
+	init_waitqueue_head(&nfc_dev->cold_reset.read_wq);
+
 	ret = alloc_chrdev_region(&nfc_dev->devno, 0, count, devname);
 	if (ret < 0) {
 		pr_err("%s: failed to alloc chrdev region ret %d\n",
@@ -302,10 +308,6 @@ int nfc_misc_probe(struct nfc_dev *nfc_dev,
 		return -ENOMEM;
 	}
 
-	nfc_dev->cold_reset.rsp_pending = false;
-	nfc_dev->cold_reset.is_nfc_enabled = false;
-	init_waitqueue_head(&nfc_dev->cold_reset.read_wq);
-
 	return 0;
 }
 
@@ -345,23 +347,30 @@ error:
 	return ret;
 }
 
+/*
+ * Read the cold reset response and store its NCI status byte, or -errno on
+ * failure, in cold_reset.status. Callers in this file hold cold_reset.lock.
+ */
 void read_cold_reset_rsp(struct nfc_dev *nfc_dev, char *header)
 {
-	int ret = -1;
+	int ret = -EIO;
 	char *cold_reset_rsp = NULL;
 	struct cold_reset *cold_reset = &nfc_dev->cold_reset;
 
 	cold_reset_rsp = kzalloc(COLD_RESET_RSP_LEN, GFP_DMA | GFP_KERNEL);
-	if (!cold_reset_rsp)
+	if (!cold_reset_rsp) {
+		cold_reset->status = -ENOMEM;
 		return;
+	}
 
 	/*
-	 * read header also if NFC is disabled
-	 * for enable case, will be taken care by nfc read thread
+	 * A reader (I2C read() or the I3C worker) passes the header it has
+	 * already read; nfc_ese_cold_reset() without a reader passes NULL
+	 * and the header is read here.
 	 */
-	if ((!cold_reset->is_nfc_enabled) &&
-		(nfc_dev->interface == PLATFORM_IF_I2C)) {
-
+	if (header) {
+		memcpy(cold_reset_rsp, header, NCI_HDR_LEN);
+	} else if (nfc_dev->interface == PLATFORM_IF_I2C) {
 		ret = nfc_dev->nfc_read(nfc_dev, cold_reset_rsp,
 						NCI_HDR_LEN);
 		if (ret <= 0) {
@@ -369,13 +378,9 @@ void read_cold_reset_rsp(struct nfc_dev *nfc_dev, char *header)
 			       __func__);
 			goto error;
 		}
-	} else if (header) {
-
-		/* For I3C driver, header is read by the worker thread */
-		memcpy(cold_reset_rsp, header, NCI_HDR_LEN);
-
 	} else {
 		pr_err("%s: - invalid or NULL header\n", __func__);
+		ret = -EINVAL;
 		goto error;
 	}
 
@@ -407,9 +412,128 @@ void read_cold_reset_rsp(struct nfc_dev *nfc_dev, char *header)
 		goto error;
 	}
 	cold_reset->status = cold_reset_rsp[NCI_PAYLOAD_IDX];
+	kfree(cold_reset_rsp);
+	return;
 
 error:
+	cold_reset->status = ret < 0 ? ret : -EIO;
 	kfree(cold_reset_rsp);
+}
+
+/*
+ * nfc_cold_reset_rsp_claim() - called by the NFC reader with the NCI header
+ * it has just read. If this is the response to an eSE cold reset that
+ * nfc_ese_pwr() is still waiting for, consume it and return true: the NFC
+ * HAL did not send the command and must not see the response.
+ */
+bool nfc_cold_reset_rsp_claim(struct nfc_dev *nfc_dev, char *header,
+			      size_t len)
+{
+	struct cold_reset *cold_reset = &nfc_dev->cold_reset;
+	bool claimed = false;
+
+	if (len < NCI_HDR_LEN || header[0] != COLD_RESET_RSP_GID ||
+	    header[1] != COLD_RESET_OID)
+		return false;
+
+	mutex_lock(&cold_reset->lock);
+	if (cold_reset->rsp_pending) {
+		read_cold_reset_rsp(nfc_dev, header);
+		cold_reset->rsp_pending = false;
+		claimed = true;
+	}
+	mutex_unlock(&cold_reset->lock);
+
+	if (claimed)
+		wake_up_interruptible(&cold_reset->read_wq);
+
+	return claimed;
+}
+
+/*
+ * nfc_ese_cold_reset() - send the eSE cold reset command and collect the
+ * response, either from the NFC HAL reader's read() when it owns NFCC reads
+ * (cold_reset.is_nfc_enabled), or directly here.
+ *
+ * Return: 0 on success, -errno on failure: the send error, -ETIMEDOUT if no
+ * response arrived, -EINTR on a signal, -EIO if the NFCC rejected it.
+ */
+static int nfc_ese_cold_reset(struct nfc_dev *nfc_dev)
+{
+	struct cold_reset *cold_reset = &nfc_dev->cold_reset;
+	bool reader_owns_rsp;
+	long wait_ret;
+	int ret;
+
+	/*
+	 * Expect the response before the command goes out, so a reader that
+	 * gets it straight away consumes it instead of passing it to the HAL.
+	 */
+	mutex_lock(&cold_reset->lock);
+	cold_reset->status = -EIO;
+	cold_reset->rsp_pending = true;
+	reader_owns_rsp = cold_reset->is_nfc_enabled;
+	mutex_unlock(&cold_reset->lock);
+
+	ret = send_cold_reset_cmd(nfc_dev);
+	if (ret != COLD_RESET_CMD_LEN) {
+		pr_err("%s: failed to send cold reset command, ret %d\n",
+		       __func__, ret);
+		mutex_lock(&cold_reset->lock);
+		cold_reset->rsp_pending = false;
+		mutex_unlock(&cold_reset->lock);
+		return ret < 0 ? ret : -EIO;
+	}
+
+	if (reader_owns_rsp) {
+		/* the reader's nfc_cold_reset_rsp_claim() wakes us up */
+		wait_ret = wait_event_interruptible_timeout(cold_reset->read_wq,
+				!READ_ONCE(cold_reset->rsp_pending),
+				msecs_to_jiffies(COLD_RESET_RSP_WAIT_TIME));
+	} else if (nfc_dev->interface == PLATFORM_IF_I2C) {
+		/* no reader active: wait for the IRQ and read it here */
+		nfc_dev->nfc_enable_intr(nfc_dev);
+		wait_ret = wait_event_interruptible_timeout(nfc_dev->read_wq,
+				!nfc_dev->i2c_dev.irq_enabled,
+				msecs_to_jiffies(MAX_IRQ_WAIT_TIME));
+		if (wait_ret > 0) {
+			mutex_lock(&cold_reset->lock);
+			if (cold_reset->rsp_pending) {
+				read_cold_reset_rsp(nfc_dev, NULL);
+				cold_reset->rsp_pending = false;
+			}
+			mutex_unlock(&cold_reset->lock);
+		} else {
+			nfc_dev->nfc_disable_intr(nfc_dev);
+		}
+	} else {
+		/* I3C: the worker thread reads the response */
+		nfc_dev->nfc_enable_intr(nfc_dev);
+		wait_ret = wait_event_interruptible(cold_reset->read_wq,
+				!READ_ONCE(cold_reset->rsp_pending));
+		nfc_dev->nfc_disable_intr(nfc_dev);
+	}
+
+	mutex_lock(&cold_reset->lock);
+	if (cold_reset->rsp_pending) {
+		/* nobody took the response: stop expecting it */
+		cold_reset->rsp_pending = false;
+		ret = wait_ret < 0 ? -EINTR : -ETIMEDOUT;
+	} else if (cold_reset->status < 0) {
+		ret = cold_reset->status;
+	} else if (cold_reset->status != NCI_STATUS_OK) {
+		pr_err("%s: NFCC rejected cold reset, status 0x%02x\n",
+		       __func__, cold_reset->status);
+		ret = -EIO;
+	} else {
+		ret = 0;
+	}
+	mutex_unlock(&cold_reset->lock);
+
+	if (ret)
+		pr_err("%s: eSE cold reset failed, ret %d\n", __func__, ret);
+
+	return ret;
 }
 
 /*
@@ -447,56 +571,7 @@ int nfc_ese_pwr(struct nfc_dev *nfc_dev, unsigned long arg)
 		}
 		nfc_dev->is_ese_session_active = false;
 	} else if (arg == ESE_COLD_RESET) {
-
-		// set default value for status as failure
-		nfc_dev->cold_reset.status = -EIO;
-
-		ret = send_cold_reset_cmd(nfc_dev);
-		if (ret <= 0) {
-			pr_err("failed to send cold reset command\n");
-			return nfc_dev->cold_reset.status;
-		}
-
-		nfc_dev->cold_reset.rsp_pending = true;
-
-		// check if NFC is enabled
-		if (nfc_dev->cold_reset.is_nfc_enabled) {
-
-			/*
-			 * nfc_read thread will initiate cold reset response
-			 * and it will signal for data available
-			 */
-			wait_event_interruptible(nfc_dev->cold_reset.read_wq,
-				!nfc_dev->cold_reset.rsp_pending);
-
-		} else {
-
-			// Read data as NFC thread is not active
-
-			nfc_dev->nfc_enable_intr(nfc_dev);
-
-			if (nfc_dev->interface == PLATFORM_IF_I2C) {
-				ret = wait_event_interruptible_timeout(
-					nfc_dev->read_wq,
-					!nfc_dev->i2c_dev.irq_enabled,
-					msecs_to_jiffies(MAX_IRQ_WAIT_TIME));
-				if (ret <= 0) {
-					nfc_dev->nfc_disable_intr(nfc_dev);
-					nfc_dev->cold_reset.rsp_pending = false;
-					return nfc_dev->cold_reset.status;
-				}
-				read_cold_reset_rsp(nfc_dev, NULL);
-				nfc_dev->cold_reset.rsp_pending = false;
-			} else {
-				wait_event_interruptible(
-					nfc_dev->cold_reset.read_wq,
-					!nfc_dev->cold_reset.rsp_pending);
-				nfc_dev->nfc_disable_intr(nfc_dev);
-			}
-		}
-
-		ret = nfc_dev->cold_reset.status;
-
+		ret = nfc_ese_cold_reset(nfc_dev);
 	} else if (arg == ESE_POWER_STATE) {
 		// eSE power state
 		ret = gpio_get_value(nfc_dev->gpio.ven);
@@ -612,12 +687,16 @@ static int nfc_ioctl_power_states(struct nfc_dev *nfc_dev, unsigned long arg)
 		/*
 		 * Setting flag true when NFC is enabled
 		 */
+		mutex_lock(&nfc_dev->cold_reset.lock);
 		nfc_dev->cold_reset.is_nfc_enabled = true;
+		mutex_unlock(&nfc_dev->cold_reset.lock);
 	} else if (arg == NFC_DISABLE) {
 		/*
 		 * Setting flag true when NFC is disabled
 		 */
+		mutex_lock(&nfc_dev->cold_reset.lock);
 		nfc_dev->cold_reset.is_nfc_enabled = false;
+		mutex_unlock(&nfc_dev->cold_reset.lock);
 	}  else {
 		pr_err("%s bad arg %lu\n", __func__, arg);
 		ret = -ENOIOCTLCMD;
@@ -641,6 +720,48 @@ unsigned int nfc_ioctl_nfcc_info(struct file *filp, unsigned long arg)
 	pr_debug("nfc : %s r = %d\n", __func__, r);
 
 	return r;
+}
+
+/*
+ * NFC_SET_RESET_READ_PENDING: the NXP SNxxx HAL tells whether its reader
+ * thread owns NFCC reads (phTmlNfc_IoCtl codes 7/8). That is what
+ * cold_reset.is_nfc_enabled tracks (older HALs used NFC_SET_PWR
+ * NFC_ENABLE/NFC_DISABLE): when set, an eSE cold reset response is taken
+ * from the reader's read() instead of being read directly, so the two
+ * readers don't race for it.
+ */
+static int nfc_ioctl_read_pending(struct nfc_dev *nfc_dev, unsigned long arg)
+{
+	if (arg != NFC_SET_READ_PENDING && arg != NFC_RESET_READ_PENDING)
+		return -EINVAL;
+
+	mutex_lock(&nfc_dev->cold_reset.lock);
+	nfc_dev->cold_reset.is_nfc_enabled = (arg == NFC_SET_READ_PENDING);
+	mutex_unlock(&nfc_dev->cold_reset.lock);
+
+	return 0;
+}
+
+static u32 nfc_gpio_status_field(unsigned int gpio, unsigned int shift)
+{
+	int val = gpio_is_valid(gpio) ? !!gpio_get_value(gpio) : -1;
+
+	return ((u32)val & NFC_GPIO_STATUS_FIELD_MASK) << shift;
+}
+
+/* NFC_GET_GPIO_STATUS: irq/ven/fw_dwl levels, layout in nfc_common.h */
+static int nfc_ioctl_gpio_status(struct nfc_dev *nfc_dev, unsigned long arg)
+{
+	u32 status;
+
+	status = nfc_gpio_status_field(nfc_dev->gpio.irq,
+				       NFC_GPIO_STATUS_IRQ_SHIFT) |
+		 nfc_gpio_status_field(nfc_dev->gpio.ven,
+				       NFC_GPIO_STATUS_VEN_SHIFT) |
+		 nfc_gpio_status_field(nfc_dev->gpio.dwl_req,
+				       NFC_GPIO_STATUS_DWL_SHIFT);
+
+	return put_user(status, (u32 __user *)arg);
 }
 
 /** @brief   IOCTL function  to be used to set or get data from upper layer.
@@ -676,6 +797,12 @@ long nfc_dev_ioctl(struct file *pfile, unsigned int cmd, unsigned long arg)
 		break;
 	case NFC_GET_PLATFORM_TYPE:
 		ret = nfc_dev->interface;
+		break;
+	case NFC_SET_RESET_READ_PENDING:
+		ret = nfc_ioctl_read_pending(nfc_dev, arg);
+		break;
+	case NFC_GET_GPIO_STATUS:
+		ret = nfc_ioctl_gpio_status(nfc_dev, arg);
 		break;
 	default:
 		pr_err("%s bad cmd %lu\n", __func__, arg);
@@ -736,6 +863,17 @@ int nfc_dev_close(struct inode *inode, struct file *filp)
 
 	if (nfc_dev->dev_ref_count > 0)
 		nfc_dev->dev_ref_count = nfc_dev->dev_ref_count - 1;
+
+	/*
+	 * Nobody has the node open, so no NFC HAL reader can pick up an eSE
+	 * cold reset response: don't let a HAL that died without
+	 * NFC_SET_RESET_READ_PENDING(0) leave cold resets waiting for it.
+	 */
+	if (nfc_dev->dev_ref_count == 0) {
+		mutex_lock(&nfc_dev->cold_reset.lock);
+		nfc_dev->cold_reset.is_nfc_enabled = false;
+		mutex_unlock(&nfc_dev->cold_reset.lock);
+	}
 
 	filp->private_data = NULL;
 

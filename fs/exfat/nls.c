@@ -790,11 +790,24 @@ int exfat_create_upcase_table(struct super_block *sb)
 
 			tbl_clu  = le32_to_cpu(ep->dentry.upcase.start_clu);
 			tbl_size = le64_to_cpu(ep->dentry.upcase.size);
-
-			sector = exfat_cluster_to_sector(sbi, tbl_clu);
-			num_sectors = ((tbl_size - 1) >> blksize_bits) + 1;
-			ret = exfat_load_upcase_table(sb, sector, num_sectors,
-				le32_to_cpu(ep->dentry.upcase.checksum));
+			if (!tbl_size) {
+				exfat_fs_error(sb,
+					       "bad upcase table size (0 bytes). Please run fsck");
+				ret = -EINVAL;
+			} else if (tbl_size > UTBL_COUNT * sizeof(unsigned short)) {
+				/*
+				 * A table covering all 0x10000 characters fits
+				 * in 128KiB; do not read a larger extent.
+				 */
+				exfat_err(sb, "bad upcase table size (%llu bytes), using default table",
+					  tbl_size);
+				ret = -EINVAL;
+			} else {
+				sector = exfat_cluster_to_sector(sbi, tbl_clu);
+				num_sectors = ((tbl_size - 1) >> blksize_bits) + 1;
+				ret = exfat_load_upcase_table(sb, sector, num_sectors,
+					le32_to_cpu(ep->dentry.upcase.checksum));
+			}
 
 			brelse(bh);
 			if (ret && ret != -EIO)

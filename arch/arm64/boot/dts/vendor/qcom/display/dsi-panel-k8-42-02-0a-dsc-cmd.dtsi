@@ -898,7 +898,7 @@
 				39 00 00 00 00 00 03 87 0F FF
 				39 00 00 00 00 00 03 51 0F FF
 				39 00 00 00 00 00 02 6F 02
-				39 01 00 00 21 00 02 87 05
+				39 01 00 00 42 00 02 87 05
 			];
 			mi,mdss-dsi-local-hbm-normal-white-1000nit-command-state = "dsi_hs_mode";
 
@@ -932,7 +932,7 @@
 				39 00 00 00 00 00 03 87 0F FF
 				39 00 00 00 00 00 03 51 0F FF
 				39 00 00 00 00 00 02 6F 02
-				39 01 00 00 21 00 02 87 05
+				39 01 00 00 32 00 02 87 05
 			];
 			mi,mdss-dsi-local-hbm-hlpm-white-1000nit-command-state = "dsi_hs_mode";
 
@@ -950,7 +950,7 @@
 				39 00 00 00 00 00 03 87 0F FF
 				39 00 00 00 00 00 03 51 0F FF
 				39 00 00 00 00 00 02 6F 02
-				39 01 00 00 21 00 02 87 05
+				39 01 00 00 32 00 02 87 05
 			];
 			mi,mdss-dsi-local-hbm-normal-white-750nit-command-state = "dsi_hs_mode";
 
@@ -968,7 +968,7 @@
 				39 00 00 00 00 00 03 87 0F FF
 				39 00 00 00 00 00 03 51 0F FF
 				39 00 00 00 00 00 02 6F 02
-				39 01 00 00 21 00 02 87 05
+				39 01 00 00 32 00 02 87 05
 			];
 			mi,mdss-dsi-local-hbm-normal-white-500nit-command-state = "dsi_hs_mode";
 
@@ -986,7 +986,7 @@
 				39 00 00 00 00 00 03 87 0F FF
 				39 00 00 00 00 00 03 51 0F FF
 				39 00 00 00 00 00 02 6F 02
-				39 01 00 00 21 00 02 87 05
+				39 01 00 00 32 00 02 87 05
 			];
 			mi,mdss-dsi-local-hbm-normal-white-110nit-command-state = "dsi_hs_mode";
 
@@ -1020,7 +1020,7 @@
 				39 00 00 00 00 00 03 87 0F FF
 				39 00 00 00 00 00 03 51 0F FF
 				39 00 00 00 00 00 02 6F 02
-				39 01 00 00 21 00 02 87 05
+				39 01 00 00 32 00 02 87 05
 			];
 			mi,mdss-dsi-local-hbm-hlpm-white-110nit-command-state = "dsi_hs_mode";
 
@@ -1038,13 +1038,14 @@
 				39 00 00 00 00 00 03 87 0F FF
 				39 00 00 00 00 00 03 51 0F FF
 				39 00 00 00 00 00 02 6F 02
-				39 01 00 00 21 00 02 87 05
+				39 01 00 00 32 00 02 87 05
 			];
 			mi,mdss-dsi-local-hbm-normal-green-500nit-command-state = "dsi_hs_mode";
 
 			mi,mdss-dsi-local-hbm-off-to-normal-command = [
 				39 01 00 00 00 00 02 53 20
 				39 00 00 00 00 00 03 51 00 00
+				39 01 00 00 00 00 04 87 00 00 04
 				39 01 00 00 00 00 04 87 00 00 04
 			];
 			mi,mdss-dsi-local-hbm-off-to-normal-command-state = "dsi_hs_mode";
@@ -1688,7 +1689,7 @@
 				39 00 00 00 00 00 03 87 0F FF
 				39 00 00 00 00 00 03 51 0F FF
 				39 00 00 00 00 00 02 6F 02
-				39 01 00 00 11 00 02 87 05
+				39 01 00 00 21 00 02 87 05
 			];
 			mi,mdss-dsi-local-hbm-normal-white-1000nit-command-state = "dsi_hs_mode";
 
@@ -1722,7 +1723,7 @@
 				39 00 00 00 00 00 03 87 0F FF
 				39 00 00 00 00 00 03 51 0F FF
 				39 00 00 00 00 00 02 6F 02
-				39 01 00 00 11 00 02 87 05
+				39 01 00 00 19 00 02 87 05
 			];
 			mi,mdss-dsi-local-hbm-hlpm-white-1000nit-command-state = "dsi_hs_mode";
 
@@ -1740,7 +1741,7 @@
 				39 00 00 00 00 00 03 87 0F FF
 				39 00 00 00 00 00 03 51 0F FF
 				39 00 00 00 00 00 02 6F 02
-				39 01 00 00 11 00 02 87 05
+				39 01 00 00 19 00 02 87 05
 			];
 			mi,mdss-dsi-local-hbm-normal-white-750nit-command-state = "dsi_hs_mode";
 
@@ -1758,7 +1759,7 @@
 				39 00 00 00 00 00 03 87 0F FF
 				39 00 00 00 00 00 03 51 0F FF
 				39 00 00 00 00 00 02 6F 02
-				39 01 00 00 11 00 02 87 05
+				39 01 00 00 19 00 02 87 05
 			];
 			mi,mdss-dsi-local-hbm-normal-white-500nit-command-state = "dsi_hs_mode";
 
@@ -1776,7 +1777,7 @@
 				39 00 00 00 00 00 03 87 0F FF
 				39 00 00 00 00 00 03 51 0F FF
 				39 00 00 00 00 00 02 6F 02
-				39 01 00 00 11 00 02 87 05
+				39 01 00 00 19 00 02 87 05
 			];
 			mi,mdss-dsi-local-hbm-normal-white-110nit-command-state = "dsi_hs_mode";
 
@@ -1810,7 +1811,7 @@
 				39 00 00 00 00 00 03 87 0F FF
 				39 00 00 00 00 00 03 51 0F FF
 				39 00 00 00 00 00 02 6F 02
-				39 01 00 00 11 00 02 87 05
+				39 01 00 00 19 00 02 87 05
 			];
 			mi,mdss-dsi-local-hbm-hlpm-white-110nit-command-state = "dsi_hs_mode";
 
@@ -1828,13 +1829,14 @@
 				39 00 00 00 00 00 03 87 0F FF
 				39 00 00 00 00 00 03 51 0F FF
 				39 00 00 00 00 00 02 6F 02
-				39 01 00 00 11 00 02 87 05
+				39 01 00 00 19 00 02 87 05
 			];
 			mi,mdss-dsi-local-hbm-normal-green-500nit-command-state = "dsi_hs_mode";
 
 			mi,mdss-dsi-local-hbm-off-to-normal-command = [
 				39 01 00 00 00 00 02 53 20
 				39 00 00 00 00 00 03 51 00 00
+				39 01 00 00 00 00 04 87 00 00 04
 				39 01 00 00 00 00 04 87 00 00 04
 			];
 			mi,mdss-dsi-local-hbm-off-to-normal-command-state = "dsi_hs_mode";

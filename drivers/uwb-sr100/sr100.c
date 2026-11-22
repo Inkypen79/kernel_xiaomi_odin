@@ -117,6 +117,8 @@ struct sr100_dev {
   unsigned int write_count;       /* Holds nubers of  byte writen*/
   unsigned int read_count;        /* Hold nubers of  byte read */
   struct mutex  sr100_access_lock;/* Hold mutex lock to between read and write */
+  struct mutex  write_lock;       /* serialises writers (tx_buffer, write_count) */
+  struct mutex  read_lock;        /* serialises readers (rx_buffer, read_count) */
   size_t totalBtyesToRead;
   size_t IsExtndLenIndication;
   int mode;
@@ -318,6 +320,12 @@ static long sr100_dev_ioctl(struct file* filp, unsigned int cmd,
 //        gpio_set_value(sr100_dev->rtc_sync_gpio, 0);
         sr100_disable_irq(sr100_dev);
         msleep(10);
+        /*
+         * A UCI reader waits without timeout: let it see the IRQ line low
+         * and re-arm the IRQ. HBCI reads time out on their own.
+         */
+        if (!is_fw_dwnld_enabled)
+          wake_up(&sr100_dev->read_wq);
       } else if (arg == ABORT_READ_PENDING) {
         pr_info("%s Abort Read Pending\n", __func__);
         read_abort_requested = true;
@@ -445,7 +453,8 @@ static int sr100_dev_transceive(struct sr100_dev* sr100_dev, int op_mode, int co
       retry_count = 0;
       /* wait for inetrrupt upto 500ms after that timeout will happen and returns read fail */
       ret = wait_event_interruptible_timeout(sr100_dev->read_wq, sr100_dev->irq_received,sr100_dev->timeOutInMs);
-      if (ret == 0) {
+      /* 0 = timeout, <0 = signal: either way no second IRQ was seen */
+      if (ret <= 0) {
         printk("wait_event_interruptible timeout() : Failed.\n");
         ret = spi_irq_wait_timeout;
         goto transcive_end;
@@ -560,14 +569,20 @@ hbci_write_fail:
  * Returns     : Number of bytes writen if write is success else (-1)
  *               otherwise indicate each error code
  ****************************************************************************/
-static ssize_t sr100_dev_write(struct file* filp, const char* buf, size_t count,
-                               loff_t* offset) {
+static ssize_t __sr100_dev_write(struct file* filp, const char* buf, size_t count,
+                                 loff_t* offset) {
   int ret;
   struct sr100_dev* sr100_dev;
   sr100_dev = filp->private_data;
   if (count > SR100_MAX_TX_BUF_SIZE || count > SR100_TXBUF_SIZE) {
     SR100_ERR_MSG("%s : Write Size Exceeds\n", __func__);
     ret = -ENOBUFS;
+    goto write_end;
+  }
+  /* A UCI write always sends a full header from tx_buffer */
+  if (!is_fw_dwnld_enabled && count < NORMAL_MODE_HEADER_LEN) {
+    SR100_ERR_MSG("%s : Write Size too small\n", __func__);
+    ret = -EINVAL;
     goto write_end;
   }
   if (copy_from_user(sr100_dev->tx_buffer, buf, count)) {
@@ -594,6 +609,19 @@ write_end:
   return ret;
 }
 
+/* Serialise writers: tx_buffer and write_count are shared per device */
+static ssize_t sr100_dev_write(struct file* filp, const char* buf, size_t count,
+                               loff_t* offset) {
+  struct sr100_dev* sr100_dev = filp->private_data;
+  ssize_t ret;
+
+  if (mutex_lock_interruptible(&sr100_dev->write_lock))
+    return -ERESTARTSYS;
+  ret = __sr100_dev_write(filp, buf, count, offset);
+  mutex_unlock(&sr100_dev->write_lock);
+  return ret;
+}
+
 /******************************************************************************
  * Function    : sr100_hbci_read
  *
@@ -615,16 +643,19 @@ static ssize_t sr100_hbci_read(struct sr100_dev *sr100_dev,char* buf, size_t cou
   }
   /* wait for inetrrupt upto 500ms after that timeout will happen and returns read fail */
   ret = wait_event_interruptible_timeout(sr100_dev->read_wq, sr100_dev->irq_received, sr100_dev->timeOutInMs);
-  if (ret == 0) {
+  if (ret <= 0) {
     printk("hbci wait_event_interruptible timeout() : Failed.\n");
-    ret = -1;
+    /* keep -1 for timeout, pass -ERESTARTSYS through on a signal */
+    if (ret == 0)
+      ret = -1;
     goto hbci_fail;
   }
 
   if (read_abort_requested) {
     read_abort_requested = false;
     printk("HBCI Abort Read pending......");
-    return ret;
+    /* nothing was copied: don't report the remaining jiffies as a length */
+    return 0;
   }
 
   if(!gpio_get_value(sr100_dev->irq_gpio)){
@@ -667,8 +698,8 @@ hbci_fail:
  * Returns     : Number of bytes read if read is success else (-1)
  *               otherwise indicate each error code
  ****************************************************************************/
-static ssize_t sr100_dev_read(struct file* filp, char* buf, size_t count,
-                              loff_t* offset) {
+static ssize_t __sr100_dev_read(struct file* filp, char* buf, size_t count,
+                                loff_t* offset) {
   struct sr100_dev* sr100_dev = filp->private_data;
   int ret = -EIO;
   int retry_count = 0;
@@ -702,6 +733,11 @@ first_irq_wait:
   }
   ret = sr100_dev_transceive(sr100_dev,SR100_READ_MODE, count);
   if(ret == spi_transcive_success){
+    /*
+     * UCI contract (NXP phTmlUwb_spi_read): userspace requests only the
+     * 4-byte header but passes a UCI_MAX_DATA_LEN (4200) buffer and expects
+     * header + payload. read_count is bounded by MAX_UCI_PKT_SIZE.
+     */
     if (copy_to_user(buf, sr100_dev->rx_buffer, sr100_dev->read_count)) {
       pr_info("sr100_dev_read: copy to user failed\n");
       ret = -EFAULT;
@@ -720,6 +756,23 @@ first_irq_wait:
   }
 read_end:
   retry_count = 0;
+  return ret;
+}
+
+/* Serialise readers: rx_buffer and read_count are shared per device */
+static ssize_t sr100_dev_read(struct file* filp, char* buf, size_t count,
+                              loff_t* offset) {
+  struct sr100_dev* sr100_dev = filp->private_data;
+  ssize_t ret;
+
+  if (filp->f_flags & O_NONBLOCK) {
+    if (!mutex_trylock(&sr100_dev->read_lock))
+      return -EAGAIN;
+  } else if (mutex_lock_interruptible(&sr100_dev->read_lock)) {
+    return -ERESTARTSYS;
+  }
+  ret = __sr100_dev_read(filp, buf, count, offset);
+  mutex_unlock(&sr100_dev->read_lock);
   return ret;
 }
 
@@ -748,16 +801,22 @@ static int sr100_hw_setup(struct sr100_spi_platform_data* platform_data) {
     goto fail_irq;
   }
 
+  ret = gpio_request(platform_data->ce_gpio, "sr100 ce");
+  if (ret < 0) {
+    pr_info("sr100 - Failed requesting ce gpio - %d\n", platform_data->ce_gpio);
+    goto fail_irq;
+  }
+
   ret = gpio_direction_output(platform_data->ce_gpio, 0);
   if (ret < 0) {
     pr_info("sr100 - Failed setting ce gpio - %d\n", platform_data->ce_gpio);
-    goto fail_gpio;
+    goto fail_ce;
   }
 
   ret = gpio_request(platform_data->spi_handshake_gpio, "sr100 ri");
   if (ret < 0) {
     pr_info("sr100 - Failed requesting ri gpio - %d\n", platform_data->spi_handshake_gpio);
-    goto fail_gpio;
+    goto fail_ce;
   }
 
   ret = gpio_direction_output(platform_data->spi_handshake_gpio, 0);
@@ -823,11 +882,25 @@ fail_gpio:
   gpio_free(platform_data->vdd_1v8_rf_gpio);
   gpio_free(platform_data->vbat_3v6_gpio);
 #endif
+fail_ce:
+  gpio_free(platform_data->ce_gpio);
 fail_irq:
   gpio_free(platform_data->irq_gpio);
 fail:
   SR100_ERR_MSG("sr100_hw_setup failed\n");
   return ret;
+}
+
+/* Undo sr100_hw_setup() on a later probe failure */
+static void sr100_hw_free(struct sr100_spi_platform_data* platform_data) {
+  gpio_free(platform_data->spi_handshake_gpio);
+#if HVH_VDD_ENABLE
+  gpio_free(platform_data->vdd_1v8_gpio);
+  gpio_free(platform_data->vdd_1v8_rf_gpio);
+  gpio_free(platform_data->vbat_3v6_gpio);
+#endif
+  gpio_free(platform_data->ce_gpio);
+  gpio_free(platform_data->irq_gpio);
 }
 /******************************************************************************
  * Function    : sr100_set_data
@@ -959,7 +1032,7 @@ static int sr100_probe(struct spi_device* spi) {
   ret = spi_setup(spi);
   if (ret < 0) {
     SR100_ERR_MSG("failed to do spi_setup()\n");
-    goto err_exit0;
+    goto err_free_gpio;
   }
 
   sr100_dev->spi = spi;
@@ -993,21 +1066,18 @@ static int sr100_probe(struct spi_device* spi) {
   /* init mutex and queues */
   init_waitqueue_head(&sr100_dev->read_wq);
   mutex_init(&sr100_dev->sr100_access_lock);
+  mutex_init(&sr100_dev->write_lock);
+  mutex_init(&sr100_dev->read_lock);
 
   spin_lock_init(&sr100_dev->irq_enabled_lock);
-
-  ret = misc_register(&sr100_dev->sr100_device);
-  if (ret < 0) {
-    SR100_ERR_MSG("misc_register failed! %d\n", ret);
-    goto err_exit0;
-  }
 
   sr100_dev->spi->irq = gpio_to_irq(platform_data->irq_gpio);
 
   if (sr100_dev->spi->irq < 0) {
     SR100_ERR_MSG("gpio_to_irq request failed gpio = 0x%x\n",
                   platform_data->irq_gpio);
-    goto err_exit1;
+    ret = sr100_dev->spi->irq;
+    goto exit_free_dev;
   }
   /* request irq.  the irq is set whenever the chip has data available
        * for reading.  it is cleared when all data has been read.
@@ -1022,12 +1092,19 @@ static int sr100_probe(struct spi_device* spi) {
                     sr100_dev->sr100_device.name, sr100_dev);
   if (ret) {
     SR100_ERR_MSG("request_irq failed\n");
-    goto err_exit1;
+    goto exit_free_dev;
   }
   sr100_disable_irq(sr100_dev);
 
   device_init_wakeup(&spi->dev, true);
   device_set_wakeup_capable(&spi->dev, true);
+
+  /* Expose the device node only once the IRQ and locks are ready */
+  ret = misc_register(&sr100_dev->sr100_device);
+  if (ret < 0) {
+    SR100_ERR_MSG("misc_register failed! %d\n", ret);
+    goto err_exit1;
+  }
 
 #if HVH_VDD_ENABLE
   gpio_set_value(sr100_dev->vdd_1v8_gpio, 1);
@@ -1039,6 +1116,8 @@ static int sr100_probe(struct spi_device* spi) {
   SR100_DBG_MSG("Exit : %s\n", __FUNCTION__);
   return ret;
 err_exit1:
+  device_init_wakeup(&spi->dev, false);
+  free_irq(sr100_dev->spi->irq, sr100_dev);
 exit_free_dev:
   if (sr100_dev != NULL) {
     if (sr100_dev->tx_buffer) {
@@ -1047,8 +1126,9 @@ exit_free_dev:
     if (sr100_dev->rx_buffer) {
       kfree(sr100_dev->rx_buffer);
     }
-    misc_deregister(&sr100_dev->sr100_device);
   }
+err_free_gpio:
+  sr100_hw_free(platform_data);
 err_exit0:
   if (sr100_dev != NULL) {
     mutex_destroy(&sr100_dev->sr100_access_lock);
@@ -1072,9 +1152,13 @@ err_exit:
 static int sr100_remove(struct spi_device* spi) {
   struct sr100_dev* sr100_dev = sr100_get_data(spi);
   SR100_DBG_MSG("Entry : %s\n", __FUNCTION__);
-  gpio_free(sr100_dev->ce_gpio);
-  mutex_destroy(&sr100_dev->sr100_access_lock);
+  /* Remove the device node before tearing down what fops use */
+  misc_deregister(&sr100_dev->sr100_device);
   free_irq(sr100_dev->spi->irq, sr100_dev);
+  mutex_destroy(&sr100_dev->sr100_access_lock);
+  mutex_destroy(&sr100_dev->write_lock);
+  mutex_destroy(&sr100_dev->read_lock);
+  gpio_free(sr100_dev->ce_gpio);
   gpio_free(sr100_dev->irq_gpio);
   gpio_free(sr100_dev->spi_handshake_gpio);
 //  gpio_free(sr100_dev->rtc_sync_gpio);
@@ -1083,7 +1167,6 @@ static int sr100_remove(struct spi_device* spi) {
   gpio_free(sr100_dev->vdd_1v8_rf_gpio);
   gpio_free(sr100_dev->vbat_3v6_gpio);
 #endif
-  misc_deregister(&sr100_dev->sr100_device);
   if (sr100_dev != NULL) {
     if (sr100_dev->tx_buffer != NULL) kfree(sr100_dev->tx_buffer);
     if (sr100_dev->rx_buffer != NULL) kfree(sr100_dev->rx_buffer);

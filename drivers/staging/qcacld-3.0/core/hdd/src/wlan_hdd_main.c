@@ -245,6 +245,8 @@ static struct cdev wlan_hdd_state_cdev;
 static struct class *class;
 static dev_t device;
 static bool hdd_loaded = false;
+/* Serializes the deferred hdd_driver_load() from /dev/wlan writes */
+static DEFINE_MUTEX(hdd_load_lock);
 #ifndef MODULE
 static struct gwlan_loader *wlan_loader;
 static ssize_t wlan_boot_cb(struct kobject *kobj,
@@ -16931,12 +16933,13 @@ static ssize_t wlan_hdd_state_ctrl_param_write(struct file *filp,
 		goto exit;
 	}
 
-	if (!hdd_loaded) {
-		if (hdd_driver_load()) {
-			pr_err("%s: Failed to init hdd module\n", __func__);
-			goto exit;
-		}
+	mutex_lock(&hdd_load_lock);
+	if (!hdd_loaded && hdd_driver_load()) {
+		mutex_unlock(&hdd_load_lock);
+		pr_err("%s: Failed to init hdd module\n", __func__);
+		goto exit;
 	}
+	mutex_unlock(&hdd_load_lock);
 
 	hdd_info("is_driver_loaded %d is_driver_recovering %d",
 		 cds_is_driver_loaded(), cds_is_driver_recovering());
@@ -17834,9 +17837,11 @@ pld_deinit:
 	pld_deinit();
 
 	hdd_start_complete(errno);
-	/* Wait for any ref taken on /dev/wlan to be released */
-	while (qdf_atomic_read(&wlan_hdd_state_fops_ref))
-		;
+	/*
+	 * Do not wait for /dev/wlan refs here: the node is created in
+	 * hdd_module_init() and this function runs from its write handler,
+	 * which holds a ref itself, so such a wait would never finish.
+	 */
 wakelock_destroy:
 	qdf_wake_lock_destroy(&wlan_wake_lock);
 comp_deinit:
@@ -18123,7 +18128,11 @@ static void __exit hdd_module_exit(void)
 #else
 static void __exit hdd_module_exit(void)
 {
-	hdd_driver_unload();
+	/* /dev/wlan is created at module init, the driver on first "ON" */
+	if (hdd_loaded)
+		hdd_driver_unload();
+	else
+		wlan_hdd_state_ctrl_param_destroy();
 }
 #endif
 #else

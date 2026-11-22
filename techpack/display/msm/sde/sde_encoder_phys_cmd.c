@@ -380,8 +380,12 @@ static void _sde_encoder_phys_cmd_setup_irq_hw_idx(
 			atomic_read(&phys_enc->vblank_cached_refcount));
 	}
 	atomic_set(&phys_enc->vblank_refcount, 0);
-	mutex_unlock(phys_enc->vblank_ctl_lock);
 
+	/*
+	 * Reset irq indices under vblank_ctl_lock so that a concurrent
+	 * control_vblank_irq() can't register RDPTR in between and have
+	 * its registration overwritten.
+	 */
 	irq = &phys_enc->irq[INTR_IDX_CTL_START];
 	irq->hw_idx = phys_enc->hw_ctl->idx;
 	irq->irq_idx = -EINVAL;
@@ -414,6 +418,8 @@ static void _sde_encoder_phys_cmd_setup_irq_hw_idx(
 		irq->hw_idx = phys_enc->hw_intf->idx;
 	else
 		irq->hw_idx = phys_enc->hw_pp->idx;
+
+	mutex_unlock(phys_enc->vblank_ctl_lock);
 }
 
 static void sde_encoder_phys_cmd_cont_splash_mode_set(

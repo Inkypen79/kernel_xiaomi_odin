@@ -3168,6 +3168,15 @@ static int cam_ife_mgr_acquire_hw(void *hw_mgr_priv, void *acquire_hw_args)
 		goto free_ctx;
 	}
 
+	if (acquire_hw_info->num_inputs >
+		ARRAY_SIZE(acquire_args->acquired_hw_id)) {
+		CAM_ERR(CAM_ISP, "Too many inputs %u, max %zu",
+			acquire_hw_info->num_inputs,
+			ARRAY_SIZE(acquire_args->acquired_hw_id));
+		rc = -EINVAL;
+		goto free_ctx;
+	}
+
 	in_port = kcalloc(acquire_hw_info->num_inputs,
 			sizeof(struct cam_isp_in_port_generic_info),
 			GFP_KERNEL);
@@ -3517,6 +3526,14 @@ static int cam_ife_mgr_acquire_dev(void *hw_mgr_priv, void *acquire_hw_args)
 		if (isp_resource[i].resource_id != CAM_ISP_RES_ID_PORT)
 			continue;
 
+		if (i >= ARRAY_SIZE(acquire_args->acquired_hw_id)) {
+			CAM_ERR(CAM_ISP, "Too many resources %u, max %zu",
+				acquire_args->num_acq,
+				ARRAY_SIZE(acquire_args->acquired_hw_id));
+			rc = -EINVAL;
+			goto free_res;
+		}
+
 		rc = cam_ife_mgr_acquire_hw_for_ctx(ife_ctx,
 			&gen_port_info[i],
 			&acquire_args->acquired_hw_id[i],
@@ -3666,6 +3683,12 @@ static int cam_isp_classify_vote_info(
 			for (i = 0; i < bw_config->num_paths; i++) {
 				if (bw_config->axi_path[i].usage_data ==
 					CAM_ISP_USAGE_LEFT_PX) {
+					if (j >= CAM_CPAS_MAX_PATHS_PER_CLIENT) {
+						CAM_ERR(CAM_ISP,
+							"Too many LEFT_PX paths, max %d",
+							CAM_CPAS_MAX_PATHS_PER_CLIENT);
+						return -EINVAL;
+					}
 					memcpy(&isp_vote->axi_path[j],
 						&bw_config->axi_path[i],
 						sizeof(struct
@@ -3683,6 +3706,12 @@ static int cam_isp_classify_vote_info(
 			for (i = 0; i < bw_config->num_paths; i++) {
 				if (bw_config->axi_path[i].usage_data ==
 					CAM_ISP_USAGE_RIGHT_PX) {
+					if (j >= CAM_CPAS_MAX_PATHS_PER_CLIENT) {
+						CAM_ERR(CAM_ISP,
+							"Too many RIGHT_PX paths, max %d",
+							CAM_CPAS_MAX_PATHS_PER_CLIENT);
+						return -EINVAL;
+					}
 					memcpy(&isp_vote->axi_path[j],
 						&bw_config->axi_path[i],
 						sizeof(struct
@@ -3704,6 +3733,12 @@ static int cam_isp_classify_vote_info(
 				CAM_AXI_PATH_DATA_IFE_RDI0) ==
 				(hw_mgr_res->res_id -
 				CAM_ISP_HW_VFE_IN_RDI0))) {
+				if (j >= CAM_CPAS_MAX_PATHS_PER_CLIENT) {
+					CAM_ERR(CAM_ISP,
+						"Too many RDI paths, max %d",
+						CAM_CPAS_MAX_PATHS_PER_CLIENT);
+					return -EINVAL;
+				}
 				memcpy(&isp_vote->axi_path[j],
 					&bw_config->axi_path[i],
 					sizeof(struct
@@ -6015,6 +6050,12 @@ static int cam_isp_packet_generic_blob_handler(void *user_data,
 		bw_config_size = sizeof(struct cam_isp_bw_config) + ((bw_config_u->num_rdi-1)*
 					sizeof(struct cam_isp_bw_vote));
 
+		if (blob_size < bw_config_size) {
+			CAM_ERR(CAM_ISP, "Invalid blob size %u expected %zu",
+				blob_size, bw_config_size);
+			return -EINVAL;
+		}
+
 		rc = cam_common_mem_kdup((void **)&bw_config, bw_config_u, bw_config_size);
 		if (rc) {
 			CAM_ERR(CAM_ISP, "Alloc and copy request bw_config failed");
@@ -6023,7 +6064,8 @@ static int cam_isp_packet_generic_blob_handler(void *user_data,
 		if (bw_config_u->num_rdi != bw_config->num_rdi) {
 			CAM_ERR(CAM_ISP, "num_rdi changed,userspace:%d, kernel:%d", bw_config_u->num_rdi,
 				bw_config->num_rdi);
-			return -EINVAL;
+			rc = -EINVAL;
+			goto free_bw_config_v1;
 		}
 
 		/* Check for integer overflow */
@@ -6035,7 +6077,8 @@ static int cam_isp_packet_generic_blob_handler(void *user_data,
 					"Max size exceeded in bw config num_rdi:%u size per port:%lu",
 					bw_config->num_rdi,
 					sizeof(struct cam_isp_bw_vote));
-				return -EINVAL;
+				rc = -EINVAL;
+				goto free_bw_config_v1;
 			}
 		}
 
@@ -6047,23 +6090,31 @@ static int cam_isp_packet_generic_blob_handler(void *user_data,
 				blob_size, sizeof(struct cam_isp_bw_config) +
 				(bw_config->num_rdi - 1) *
 				sizeof(struct cam_isp_bw_vote));
-			return -EINVAL;
+			rc = -EINVAL;
+			goto free_bw_config_v1;
 		}
 
 		if (!prepare || !prepare->priv ||
 			(bw_config->usage_type >= CAM_IFE_HW_NUM_MAX)) {
 			CAM_ERR(CAM_ISP, "Invalid inputs usage type %d",
 				bw_config->usage_type);
-			return -EINVAL;
+			rc = -EINVAL;
+			goto free_bw_config_v1;
 		}
 
 		prepare_hw_data = (struct cam_isp_prepare_hw_update_data  *)
 			prepare->priv;
 
+		/* bw_config only holds bw_config_size bytes (num_rdi entries) */
+		memset(&prepare_hw_data->bw_config[bw_config->usage_type], 0,
+			sizeof(prepare_hw_data->bw_config[0]));
 		memcpy(&prepare_hw_data->bw_config[bw_config->usage_type],
-			bw_config, sizeof(prepare_hw_data->bw_config[0]));
+			bw_config, min_t(size_t, bw_config_size,
+			sizeof(prepare_hw_data->bw_config[0])));
 		prepare_hw_data->bw_config_version = CAM_ISP_BW_CONFIG_V1;
 		prepare_hw_data->bw_config_valid[bw_config->usage_type] = true;
+free_bw_config_v1:
+		cam_common_mem_free(bw_config);
 	}
 		break;
 	case CAM_ISP_GENERIC_BLOB_TYPE_BW_CONFIG_V2: {
@@ -6089,6 +6140,12 @@ static int cam_isp_packet_generic_blob_handler(void *user_data,
 		bw_config_size = sizeof(struct cam_isp_bw_config_v2) + ((bw_config_u->num_paths-1)*
 					sizeof(struct cam_axi_per_path_bw_vote));
 
+		if (blob_size < bw_config_size) {
+			CAM_ERR(CAM_ISP, "Invalid blob size %u expected %zu",
+				blob_size, bw_config_size);
+			return -EINVAL;
+		}
+
 		rc = cam_common_mem_kdup((void **)&bw_config, bw_config_u, bw_config_size);
 		if (rc) {
 			CAM_ERR(CAM_ISP, "Alloc and copy request bw_config failed");
@@ -6098,7 +6155,8 @@ static int cam_isp_packet_generic_blob_handler(void *user_data,
 		if (bw_config_u->num_paths != bw_config->num_paths) {
 			CAM_ERR(CAM_ISP, "num_paths changed,userspace:%d, kernel:%d", bw_config_u->num_paths,
 					bw_config->num_paths);
-			return -EINVAL;
+			rc = -EINVAL;
+			goto free_bw_config_v2;
 		}
 
 		/* Check for integer overflow */
@@ -6112,7 +6170,8 @@ static int cam_isp_packet_generic_blob_handler(void *user_data,
 					bw_config->num_paths - 1,
 					sizeof(
 					struct cam_axi_per_path_bw_vote));
-				return -EINVAL;
+				rc = -EINVAL;
+				goto free_bw_config_v2;
 			}
 		}
 
@@ -6125,14 +6184,16 @@ static int cam_isp_packet_generic_blob_handler(void *user_data,
 				blob_size, bw_config->num_paths,
 				sizeof(struct cam_isp_bw_config_v2),
 				sizeof(struct cam_axi_per_path_bw_vote));
-			return -EINVAL;
+			rc = -EINVAL;
+			goto free_bw_config_v2;
 		}
 
 		if (!prepare || !prepare->priv ||
 			(bw_config->usage_type >= CAM_IFE_HW_NUM_MAX)) {
 			CAM_ERR(CAM_ISP, "Invalid inputs usage type %d",
 				bw_config->usage_type);
-			return -EINVAL;
+			rc = -EINVAL;
+			goto free_bw_config_v2;
 		}
 
 		prepare_hw_data = (struct cam_isp_prepare_hw_update_data  *)
@@ -6149,6 +6210,8 @@ static int cam_isp_packet_generic_blob_handler(void *user_data,
 
 		prepare_hw_data->bw_config_version = CAM_ISP_BW_CONFIG_V2;
 		prepare_hw_data->bw_config_valid[bw_config->usage_type] = true;
+free_bw_config_v2:
+		cam_common_mem_free(bw_config);
 	}
 		break;
 	case CAM_ISP_GENERIC_BLOB_TYPE_UBWC_CONFIG: {
@@ -6484,6 +6547,13 @@ static int cam_ife_mgr_util_insert_frame_header(
 	if (frame_header_iova % 16) {
 		padded_bytes = (uint32_t)(16 - (frame_header_iova % 16));
 		frame_header_iova += padded_bytes;
+	}
+
+	if (kmd_buf->size < (kmd_buf->used_bytes + padded_bytes + 128)) {
+		CAM_ERR(CAM_ISP,
+			"No space for frame header, kmd size %u used %u",
+			kmd_buf->size, kmd_buf->used_bytes);
+		return -ENOMEM;
 	}
 
 	prepare_hw_data->frame_header_iova = frame_header_iova;

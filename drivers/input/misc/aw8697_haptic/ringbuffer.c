@@ -184,10 +184,11 @@ int create_rb(void)
 
 	return 0;
 err:
-	if (grb)
-		kfree(grb);
-	if (grb->gbuffer)
+	if (grb) {
 		kfree(grb->gbuffer);
+		kfree(grb);
+		grb = NULL;
+	}
 	return  -EPERM;
 }
 

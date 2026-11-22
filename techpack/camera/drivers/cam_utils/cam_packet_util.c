@@ -173,6 +173,11 @@ int cam_packet_util_get_kmd_buffer(struct cam_packet *packet,
 	kmd_buf->handle     = cmd_desc->mem_handle;
 	kmd_buf->offset     = cmd_desc->offset + packet->kmd_cmd_buf_offset;
 	kmd_buf->size       = cmd_desc->size - cmd_desc->length;
+	/* KMD region must not extend past the mapped buffer */
+	if ((size_t)kmd_buf->size >
+		(remain_len - (size_t)packet->kmd_cmd_buf_offset))
+		kmd_buf->size = (uint32_t)(remain_len -
+			(size_t)packet->kmd_cmd_buf_offset);
 	kmd_buf->used_bytes = 0;
 
 rel_kmd_buf:

@@ -1894,6 +1894,7 @@ static int cam_soc_util_dump_cont_reg_range(
 {
 	int         i = 0, rc = 0;
 	uint32_t    write_idx = 0;
+	uint32_t    num_values, bytes_written, reg_offset;
 
 	if (!soc_info || !dump_out_buf || !reg_read || !cmd_buf_end) {
 		CAM_ERR(CAM_UTIL,
@@ -1903,48 +1904,54 @@ static int cam_soc_util_dump_cont_reg_range(
 		goto end;
 	}
 
-	if ((reg_read->num_values) && ((reg_read->num_values > U32_MAX / 2) ||
+	/* descriptor and out buffer are user-shared: fetch only once */
+	num_values = READ_ONCE(reg_read->num_values);
+	reg_offset = READ_ONCE(reg_read->offset);
+	bytes_written = READ_ONCE(dump_out_buf->bytes_written);
+
+	if ((num_values) && ((num_values > U32_MAX / 2) ||
 		(sizeof(uint32_t) > ((U32_MAX -
 		sizeof(struct cam_reg_dump_out_buffer) -
-		dump_out_buf->bytes_written) /
-		(reg_read->num_values * 2))))) {
+		bytes_written) /
+		(num_values * 2))))) {
 		CAM_ERR(CAM_UTIL,
 			"Integer Overflow bytes_written: [%u] num_values: [%u]",
-			dump_out_buf->bytes_written, reg_read->num_values);
+			bytes_written, num_values);
 		rc = -EOVERFLOW;
 		goto end;
 	}
 
 	if ((cmd_buf_end - (uintptr_t)dump_out_buf) <=
 		(uintptr_t)(sizeof(struct cam_reg_dump_out_buffer)
-		- sizeof(uint32_t) + dump_out_buf->bytes_written +
-		(reg_read->num_values * 2 * sizeof(uint32_t)))) {
+		- sizeof(uint32_t) + bytes_written +
+		(num_values * 2 * sizeof(uint32_t)))) {
 		CAM_ERR(CAM_UTIL,
 			"Insufficient space in out buffer num_values: [%d] cmd_buf_end: %pK dump_out_buf: %pK",
-			reg_read->num_values, cmd_buf_end,
+			num_values, cmd_buf_end,
 			(uintptr_t)dump_out_buf);
 		rc = -EINVAL;
 		goto end;
 	}
 
-	write_idx = dump_out_buf->bytes_written / sizeof(uint32_t);
-	for (i = 0; i < reg_read->num_values; i++) {
-		if ((reg_read->offset + (i * sizeof(uint32_t))) >
+	write_idx = bytes_written / sizeof(uint32_t);
+	for (i = 0; i < num_values; i++) {
+		if ((reg_offset + (i * sizeof(uint32_t))) >
 			(uint32_t)soc_info->reg_map[base_idx].size) {
 			CAM_ERR(CAM_UTIL,
 				"Reg offset out of range, offset: 0x%X reg_map size: 0x%X",
-				(reg_read->offset + (i * sizeof(uint32_t))),
+				(reg_offset + (i * sizeof(uint32_t))),
 				(uint32_t)soc_info->reg_map[base_idx].size);
 			rc = -EINVAL;
 			goto end;
 		}
 
-		dump_out_buf->dump_data[write_idx++] = reg_read->offset +
+		dump_out_buf->dump_data[write_idx++] = reg_offset +
 			(i * sizeof(uint32_t));
 		dump_out_buf->dump_data[write_idx++] =
 			cam_soc_util_r(soc_info, base_idx,
-			(reg_read->offset + (i * sizeof(uint32_t))));
-		dump_out_buf->bytes_written += (2 * sizeof(uint32_t));
+			(reg_offset + (i * sizeof(uint32_t))));
+		bytes_written += (2 * sizeof(uint32_t));
+		dump_out_buf->bytes_written = bytes_written;
 	}
 
 end:
@@ -1958,6 +1965,8 @@ static int cam_soc_util_dump_dmi_reg_range(
 {
 	int        i = 0, rc = 0;
 	uint32_t   write_idx = 0;
+	uint32_t   num_pre_writes, num_post_writes, num_values;
+	uint32_t   bytes_written, reg_offset;
 
 	if (!soc_info || !dump_out_buf || !dmi_read || !cmd_buf_end) {
 		CAM_ERR(CAM_UTIL,
@@ -1967,28 +1976,34 @@ static int cam_soc_util_dump_dmi_reg_range(
 		goto end;
 	}
 
-	if (dmi_read->num_pre_writes > CAM_REG_DUMP_DMI_CONFIG_MAX ||
-		dmi_read->num_post_writes > CAM_REG_DUMP_DMI_CONFIG_MAX) {
+	/* descriptor and out buffer are user-shared: fetch only once */
+	num_pre_writes = READ_ONCE(dmi_read->num_pre_writes);
+	num_post_writes = READ_ONCE(dmi_read->num_post_writes);
+	num_values = READ_ONCE(dmi_read->dmi_data_read.num_values);
+	bytes_written = READ_ONCE(dump_out_buf->bytes_written);
+
+	if (num_pre_writes > CAM_REG_DUMP_DMI_CONFIG_MAX ||
+		num_post_writes > CAM_REG_DUMP_DMI_CONFIG_MAX) {
 		CAM_ERR(CAM_UTIL,
 			"Invalid number of requested writes, pre: %d post: %d",
-			dmi_read->num_pre_writes, dmi_read->num_post_writes);
+			num_pre_writes, num_post_writes);
 		rc = -EINVAL;
 		goto end;
 	}
 
-	if ((dmi_read->num_pre_writes + dmi_read->dmi_data_read.num_values)
-		&& ((dmi_read->num_pre_writes > U32_MAX / 2) ||
-		(dmi_read->dmi_data_read.num_values > U32_MAX / 2) ||
-		((dmi_read->num_pre_writes * 2) > U32_MAX -
-		(dmi_read->dmi_data_read.num_values * 2)) ||
+	if ((num_pre_writes + num_values)
+		&& ((num_pre_writes > U32_MAX / 2) ||
+		(num_values > U32_MAX / 2) ||
+		((num_pre_writes * 2) > U32_MAX -
+		(num_values * 2)) ||
 		(sizeof(uint32_t) > ((U32_MAX -
 		sizeof(struct cam_reg_dump_out_buffer) -
-		dump_out_buf->bytes_written) / ((dmi_read->num_pre_writes +
-		dmi_read->dmi_data_read.num_values) * 2))))) {
+		bytes_written) / ((num_pre_writes +
+		num_values) * 2))))) {
 		CAM_ERR(CAM_UTIL,
 			"Integer Overflow bytes_written: [%u] num_pre_writes: [%u] num_values: [%u]",
-			dump_out_buf->bytes_written, dmi_read->num_pre_writes,
-			dmi_read->dmi_data_read.num_values);
+			bytes_written, num_pre_writes,
+			num_values);
 		rc = -EOVERFLOW;
 		goto end;
 	}
@@ -1996,73 +2011,78 @@ static int cam_soc_util_dump_dmi_reg_range(
 	if ((cmd_buf_end - (uintptr_t)dump_out_buf) <=
 		(uintptr_t)(
 		sizeof(struct cam_reg_dump_out_buffer) - sizeof(uint32_t) +
-		(dump_out_buf->bytes_written +
-		(dmi_read->num_pre_writes * 2 * sizeof(uint32_t)) +
-		(dmi_read->dmi_data_read.num_values * 2 *
+		(bytes_written +
+		(num_pre_writes * 2 * sizeof(uint32_t)) +
+		(num_values * 2 *
 		sizeof(uint32_t))))) {
 		CAM_ERR(CAM_UTIL,
 			"Insufficient space in out buffer num_read_val: [%d] num_write_val: [%d] cmd_buf_end: %pK dump_out_buf: %pK",
-			dmi_read->dmi_data_read.num_values,
-			dmi_read->num_pre_writes, cmd_buf_end,
+			num_values,
+			num_pre_writes, cmd_buf_end,
 			(uintptr_t)dump_out_buf);
 		rc = -EINVAL;
 		goto end;
 	}
 
-	write_idx = dump_out_buf->bytes_written / sizeof(uint32_t);
-	for (i = 0; i < dmi_read->num_pre_writes; i++) {
-		if (dmi_read->pre_read_config[i].offset >
+	write_idx = bytes_written / sizeof(uint32_t);
+	for (i = 0; i < num_pre_writes; i++) {
+		reg_offset = READ_ONCE(dmi_read->pre_read_config[i].offset);
+		if (reg_offset >
 			(uint32_t)soc_info->reg_map[base_idx].size) {
 			CAM_ERR(CAM_UTIL,
 				"Reg offset out of range, offset: 0x%X reg_map size: 0x%X",
-				dmi_read->pre_read_config[i].offset,
+				reg_offset,
 				(uint32_t)soc_info->reg_map[base_idx].size);
 			rc = -EINVAL;
 			goto end;
 		}
 
 		cam_soc_util_w_mb(soc_info, base_idx,
-			dmi_read->pre_read_config[i].offset,
+			reg_offset,
 			dmi_read->pre_read_config[i].value);
 		dump_out_buf->dump_data[write_idx++] =
-			dmi_read->pre_read_config[i].offset;
+			reg_offset;
 		dump_out_buf->dump_data[write_idx++] =
 			dmi_read->pre_read_config[i].value;
-		dump_out_buf->bytes_written += (2 * sizeof(uint32_t));
+		bytes_written += (2 * sizeof(uint32_t));
+		dump_out_buf->bytes_written = bytes_written;
 	}
 
-	if (dmi_read->dmi_data_read.offset >
+	reg_offset = READ_ONCE(dmi_read->dmi_data_read.offset);
+	if (reg_offset >
 		(uint32_t)soc_info->reg_map[base_idx].size) {
 		CAM_ERR(CAM_UTIL,
 			"Reg offset out of range, offset: 0x%X reg_map size: 0x%X",
-			dmi_read->dmi_data_read.offset,
+			reg_offset,
 			(uint32_t)soc_info->reg_map[base_idx].size);
 		rc = -EINVAL;
 		goto end;
 	}
 
-	for (i = 0; i < dmi_read->dmi_data_read.num_values; i++) {
+	for (i = 0; i < num_values; i++) {
 		dump_out_buf->dump_data[write_idx++] =
-			dmi_read->dmi_data_read.offset;
+			reg_offset;
 		dump_out_buf->dump_data[write_idx++] =
 			cam_soc_util_r_mb(soc_info, base_idx,
-			dmi_read->dmi_data_read.offset);
-		dump_out_buf->bytes_written += (2 * sizeof(uint32_t));
+			reg_offset);
+		bytes_written += (2 * sizeof(uint32_t));
+		dump_out_buf->bytes_written = bytes_written;
 	}
 
-	for (i = 0; i < dmi_read->num_post_writes; i++) {
-		if (dmi_read->post_read_config[i].offset >
+	for (i = 0; i < num_post_writes; i++) {
+		reg_offset = READ_ONCE(dmi_read->post_read_config[i].offset);
+		if (reg_offset >
 			(uint32_t)soc_info->reg_map[base_idx].size) {
 			CAM_ERR(CAM_UTIL,
 				"Reg offset out of range, offset: 0x%X reg_map size: 0x%X",
-				dmi_read->post_read_config[i].offset,
+				reg_offset,
 				(uint32_t)soc_info->reg_map[base_idx].size);
 			rc = -EINVAL;
 			goto end;
 		}
 
 		cam_soc_util_w_mb(soc_info, base_idx,
-			dmi_read->post_read_config[i].offset,
+			reg_offset,
 			dmi_read->post_read_config[i].value);
 	}
 
@@ -2080,10 +2100,12 @@ static int cam_soc_util_dump_dmi_reg_range_user_buf(
 	size_t                         buf_len = 0;
 	uint8_t                       *dst;
 	size_t                         remain_len;
-	uint32_t                       min_len;
+	size_t                         min_len;
 	uint32_t                      *waddr, *start;
 	uintptr_t                      cpu_addr;
 	struct cam_hw_soc_dump_header *hdr;
+	uint32_t                       num_pre_writes, num_post_writes;
+	uint32_t                       num_values, reg_offset;
 
 	if (!soc_info || !dump_args || !dmi_read) {
 		CAM_ERR(CAM_UTIL,
@@ -2092,11 +2114,16 @@ static int cam_soc_util_dump_dmi_reg_range_user_buf(
 		return -EINVAL;
 	}
 
-	if (dmi_read->num_pre_writes > CAM_REG_DUMP_DMI_CONFIG_MAX ||
-		dmi_read->num_post_writes > CAM_REG_DUMP_DMI_CONFIG_MAX) {
+	/* descriptor is in user-shared memory: fetch counts only once */
+	num_pre_writes = READ_ONCE(dmi_read->num_pre_writes);
+	num_post_writes = READ_ONCE(dmi_read->num_post_writes);
+	num_values = READ_ONCE(dmi_read->dmi_data_read.num_values);
+
+	if (num_pre_writes > CAM_REG_DUMP_DMI_CONFIG_MAX ||
+		num_post_writes > CAM_REG_DUMP_DMI_CONFIG_MAX) {
 		CAM_ERR(CAM_UTIL,
 			"Invalid number of requested writes, pre: %d post: %d",
-			dmi_read->num_pre_writes, dmi_read->num_post_writes);
+			num_pre_writes, num_post_writes);
 		return -EINVAL;
 	}
 
@@ -2114,14 +2141,12 @@ static int cam_soc_util_dump_dmi_reg_range_user_buf(
 		goto end;
 	}
 	remain_len = buf_len - dump_args->offset;
-	min_len = (dmi_read->num_pre_writes * 2 * sizeof(uint32_t)) +
-		(dmi_read->dmi_data_read.num_values * 2 * sizeof(uint32_t)) +
-		sizeof(uint32_t);
+	min_len = sizeof(struct cam_hw_soc_dump_header) + sizeof(uint32_t) +
+		(((size_t)num_pre_writes + num_values) * 2 * sizeof(uint32_t));
 	if (remain_len < min_len) {
 		CAM_WARN(CAM_UTIL,
-			"Dump Buffer exhaust read %d write %d remain %zu min %u",
-			dmi_read->dmi_data_read.num_values,
-			dmi_read->num_pre_writes, remain_len,
+			"Dump Buffer exhaust read %d write %d remain %zu min %zu",
+			num_values, num_pre_writes, remain_len,
 			min_len);
 		rc = -ENOSPC;
 		goto end;
@@ -2137,52 +2162,55 @@ static int cam_soc_util_dump_dmi_reg_range_user_buf(
 	hdr->word_size = sizeof(uint32_t);
 	*waddr = soc_info->index;
 	waddr++;
-	for (i = 0; i < dmi_read->num_pre_writes; i++) {
-		if (dmi_read->pre_read_config[i].offset >
+	for (i = 0; i < num_pre_writes; i++) {
+		reg_offset = READ_ONCE(dmi_read->pre_read_config[i].offset);
+		if (reg_offset >
 			(uint32_t)soc_info->reg_map[base_idx].size) {
 			CAM_ERR(CAM_UTIL,
 				"Reg offset out of range, offset: 0x%X reg_map size: 0x%X",
-				dmi_read->pre_read_config[i].offset,
+				reg_offset,
 				(uint32_t)soc_info->reg_map[base_idx].size);
 			rc = -EINVAL;
 			goto end;
 		}
 
 		cam_soc_util_w_mb(soc_info, base_idx,
-			dmi_read->pre_read_config[i].offset,
+			reg_offset,
 			dmi_read->pre_read_config[i].value);
-		*waddr++ = dmi_read->pre_read_config[i].offset;
+		*waddr++ = reg_offset;
 		*waddr++ = dmi_read->pre_read_config[i].value;
 	}
 
-	if (dmi_read->dmi_data_read.offset >
+	reg_offset = READ_ONCE(dmi_read->dmi_data_read.offset);
+	if (reg_offset >
 		(uint32_t)soc_info->reg_map[base_idx].size) {
 		CAM_ERR(CAM_UTIL,
 			"Reg offset out of range, offset: 0x%X reg_map size: 0x%X",
-			dmi_read->dmi_data_read.offset,
+			reg_offset,
 			(uint32_t)soc_info->reg_map[base_idx].size);
 		rc = -EINVAL;
 		goto end;
 	}
 
-	for (i = 0; i < dmi_read->dmi_data_read.num_values; i++) {
-		*waddr++ = dmi_read->dmi_data_read.offset;
+	for (i = 0; i < num_values; i++) {
+		*waddr++ = reg_offset;
 		*waddr++ = cam_soc_util_r_mb(soc_info, base_idx,
-			dmi_read->dmi_data_read.offset);
+			reg_offset);
 	}
 
-	for (i = 0; i < dmi_read->num_post_writes; i++) {
-		if (dmi_read->post_read_config[i].offset >
+	for (i = 0; i < num_post_writes; i++) {
+		reg_offset = READ_ONCE(dmi_read->post_read_config[i].offset);
+		if (reg_offset >
 			(uint32_t)soc_info->reg_map[base_idx].size) {
 			CAM_ERR(CAM_UTIL,
 				"Reg offset out of range, offset: 0x%X reg_map size: 0x%X",
-				dmi_read->post_read_config[i].offset,
+				reg_offset,
 				(uint32_t)soc_info->reg_map[base_idx].size);
 			rc = -EINVAL;
 			goto end;
 		}
 		cam_soc_util_w_mb(soc_info, base_idx,
-			dmi_read->post_read_config[i].offset,
+			reg_offset,
 			dmi_read->post_read_config[i].value);
 	}
 	hdr->size = (waddr - start) * hdr->word_size;
@@ -2206,10 +2234,11 @@ static int cam_soc_util_dump_cont_reg_range_user_buf(
 	size_t                         buf_len;
 	uint8_t                       *dst;
 	size_t                         remain_len;
-	uint32_t                       min_len;
+	size_t                         min_len;
 	uint32_t                      *waddr, *start;
 	uintptr_t                      cpu_addr;
 	struct cam_hw_soc_dump_header  *hdr;
+	uint32_t                       num_values, reg_offset;
 
 	if (!soc_info || !dump_args || !reg_read) {
 		CAM_ERR(CAM_UTIL,
@@ -2231,12 +2260,15 @@ static int cam_soc_util_dump_cont_reg_range_user_buf(
 		goto end;
 	}
 	remain_len = buf_len - dump_args->offset;
-	min_len = (reg_read->num_values * 2 * sizeof(uint32_t)) +
+	/* descriptor is in user-shared memory: fetch fields only once */
+	num_values = READ_ONCE(reg_read->num_values);
+	reg_offset = READ_ONCE(reg_read->offset);
+	min_len = ((size_t)num_values * 2 * sizeof(uint32_t)) +
 		sizeof(struct cam_hw_soc_dump_header) + sizeof(uint32_t);
 	if (remain_len < min_len) {
 		CAM_WARN(CAM_UTIL,
-			"Dump Buffer exhaust read_values %d remain %zu min %u",
-			reg_read->num_values,
+			"Dump Buffer exhaust read_values %d remain %zu min %zu",
+			num_values,
 			remain_len,
 			min_len);
 		rc = -ENOSPC;
@@ -2252,20 +2284,20 @@ static int cam_soc_util_dump_cont_reg_range_user_buf(
 	hdr->word_size = sizeof(uint32_t);
 	*waddr = soc_info->index;
 	waddr++;
-	for (i = 0; i < reg_read->num_values; i++) {
-		if ((reg_read->offset + (i * sizeof(uint32_t))) >
+	for (i = 0; i < num_values; i++) {
+		if ((reg_offset + (i * sizeof(uint32_t))) >
 			(uint32_t)soc_info->reg_map[base_idx].size) {
 			CAM_ERR(CAM_UTIL,
 				"Reg offset out of range, offset: 0x%X reg_map size: 0x%X",
-				(reg_read->offset + (i * sizeof(uint32_t))),
+				(reg_offset + (i * sizeof(uint32_t))),
 				(uint32_t)soc_info->reg_map[base_idx].size);
 			rc = -EINVAL;
 			goto end;
 		}
 
-		waddr[0] = reg_read->offset + (i * sizeof(uint32_t));
+		waddr[0] = reg_offset + (i * sizeof(uint32_t));
 		waddr[1] = cam_soc_util_r(soc_info, base_idx,
-			(reg_read->offset + (i * sizeof(uint32_t))));
+			(reg_offset + (i * sizeof(uint32_t))));
 		waddr += 2;
 	}
 	hdr->size = (waddr - start) * hdr->word_size;

@@ -166,7 +166,7 @@
 	camera_tele5x_vana_ldo: gpio-regulator@4 {
 		compatible = "regulator-fixed";
 		reg = <0x04 0x00>;
-		regulator-name = "camera_wide_vana_ldo";
+		regulator-name = "camera_tele5x_vana_ldo";
 		regulator-min-microvolt = <2800000>;
 		regulator-max-microvolt = <2800000>;
 		regulator-enable-ramp-delay = <135>;
@@ -177,7 +177,7 @@
 	camera_tele5x_dvdd_ldo: gpio-regulator@5 {
 		compatible = "regulator-fixed";
 		reg = <0x05 0x00>;
-		regulator-name = "camera_wide_dvdd_ldo";
+		regulator-name = "camera_tele5x_dvdd_ldo";
 		regulator-min-microvolt = <1200000>;
 		regulator-max-microvolt = <1200000>;
 		regulator-enable-ramp-delay = <135>;
